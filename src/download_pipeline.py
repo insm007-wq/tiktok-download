@@ -1,7 +1,9 @@
 """다운로드 파이프라인 — URL 파싱 → 영상 조회 → 다운로드 → dataset push."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+from urllib.parse import urlparse
 
 from apify import Actor
 
@@ -9,6 +11,7 @@ from url_parser import parse_video_input
 from video_detail import fetch_video_detail, fetch_video_detail_html
 from video_storage import download_full_video
 from play_url import _play_url_candidates, _best_preview_play_url, _merged_video_block
+from tikwm_api import fetch_tikwm
 from aweme_fields import (
     _aweme_unique_id,
     _hashtags_from_aweme,
@@ -17,6 +20,28 @@ from aweme_fields import (
     _uploaded_at_seconds,
 )
 from session import cookie_dict as _cookie_dict
+
+
+def _aweme_from_tikwm(d: dict, video_id: str) -> dict:
+    """TikWM data dict → _build_result이 기대하는 aweme 스키마.
+
+    웹 API·HTML 모두 실패했을 때 최소 메타데이터를 채우기 위한 폴백.
+    `aweme_fields.py`가 camelCase/snake_case 병행 처리하므로 TikWM의 snake_case
+    필드명을 그대로 둬도 추출됨. duration은 초(TikWM) → ms(기존 스키마) 변환.
+    """
+    return {
+        "aweme_id": d.get("id") or video_id,
+        "desc": d.get("title") or "",
+        "author": d.get("author") or {},
+        "statistics": {
+            "play_count": d.get("play_count", 0),
+            "digg_count": d.get("digg_count", 0),
+            "comment_count": d.get("comment_count", 0),
+            "share_count": d.get("share_count", 0),
+        },
+        "create_time": d.get("create_time", 0),
+        "video": {"duration": (d.get("duration") or 0) * 1000},
+    }
 
 
 async def process_video(
@@ -41,15 +66,20 @@ async def process_video(
     video_id = video_input.video_id
     actor.log.info(f"[pipeline] 처리 시작 id={video_id} url={video_input.original}")
 
-    # 2. 영상 상세 데이터 조회 (API 우선, HTML 폴백)
-    aweme = await fetch_video_detail(
-        client, video_id, actor, ms_token_override=ms_token_override,
+    # 2. 영상 상세 데이터 조회 — TikTok 웹 API와 TikWM 병렬 호출.
+    # TikWM(공개 API)는 워터마크 없는 CDN URL(hdplay/play) 확보용.
+    aweme, tikwm_data = await asyncio.gather(
+        fetch_video_detail(client, video_id, actor, ms_token_override=ms_token_override),
+        fetch_tikwm(client, raw_url, actor),
     )
     if not aweme:
-        actor.log.info(f"[pipeline] API 실패 → HTML 폴백 id={video_id}")
+        actor.log.info(f"[pipeline] 웹 API 실패 → HTML 폴백 id={video_id}")
         aweme = await fetch_video_detail_html(
             client, video_id, video_input.username, actor,
         )
+    if not aweme and tikwm_data:
+        actor.log.info(f"[pipeline] 웹·HTML 실패 → TikWM 메타로 재구성 id={video_id}")
+        aweme = _aweme_from_tikwm(tikwm_data, video_id)
 
     if not aweme:
         actor.log.error(f"[pipeline] 영상 데이터 조회 실패 id={video_id}")
@@ -60,12 +90,20 @@ async def process_video(
             "error": "영상 데이터를 조회할 수 없습니다. URL이 유효한지 확인해주세요.",
         }
 
-    # 3. 영상 URL 추출
+    # 3. 영상 URL 결정 — TikWM(hdplay/play) 우선, 없으면 TikTok CDN.
     video_block = _merged_video_block(aweme, aweme)
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
+    fallback_cdn = primary_url or (candidates[0] if candidates else None)
 
-    if not primary_url and not candidates:
+    tikwm_url = None
+    if tikwm_data:
+        tikwm_url = tikwm_data.get("hdplay") or tikwm_data.get("play")
+
+    cdn_url = tikwm_url or fallback_cdn
+    url_source = "tikwm" if tikwm_url else "tiktok_cdn"
+
+    if not cdn_url:
         actor.log.error(f"[pipeline] 재생 URL 없음 id={video_id}")
         return _build_result(
             aweme, video_id, raw_url,
@@ -73,14 +111,12 @@ async def process_video(
             error="영상 재생 URL을 찾을 수 없습니다.",
         )
 
-    cdn_url = primary_url or (candidates[0] if candidates else None)
-    # 진단: 선택된 URL 도메인 — 워터마크 여부 추적용.
-    # play_addr 계열: v16-webapp-prime / v16m-default / v19.tiktokcdn-us (워터마크 없음)
-    # download_addr 계열: api*.tiktokv.com 또는 specific 경로 (워터마크 있음)
-    if cdn_url:
-        from urllib.parse import urlparse
-        host = urlparse(cdn_url).netloc
-        actor.log.info(f"[pipeline] 선택 cdn_url host={host} id={video_id}")
+    # 진단: 워터마크 소스 추적용. tikwm = 워터마크 없음(hdplay/play),
+    # tiktok_cdn은 도메인에 따라 달라짐 — host 로그와 함께 확인.
+    host = urlparse(cdn_url).netloc
+    actor.log.info(
+        f"[pipeline] cdn_url host={host} url_source={url_source} id={video_id}"
+    )
 
     # 4. 전체 다운로드
     cookies = _cookie_dict(client)

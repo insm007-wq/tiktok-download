@@ -14,6 +14,11 @@ SEARCH_API_URL = "https://www.tiktok.com/api/search/item/full/"
 VIDEO_DETAIL_API_URL = "https://www.tiktok.com/api/item/detail/"
 ACTOR_DOWNLOAD_REVISION = "20260417_v1"
 
+# TikWM 공개 API — 워터마크 없는 CDN URL(hdplay/play) 확보용. TikTok 웹 API와
+# 병렬 호출해서 영상 URL만 TikWM 걸 우선 사용. 실패 시 기존 CDN URL 폴백.
+TIKWM_API_URL = "https://tikwm.com/api/"
+TIKWM_TIMEOUT_SEC = 5.0
+
 # KV Store 레코드 최대 크기 (9MB)
 MAX_KV_RECORD_BYTES = 9 * 1024 * 1024
 

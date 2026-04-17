@@ -6,9 +6,18 @@ from typing import Any
 from apify import Actor
 
 from url_parser import parse_video_input
-from video_detail import fetch_video_detail, fetch_video_detail_html
+from video_detail import (
+    fetch_video_detail,
+    fetch_video_detail_html,
+    fetch_video_detail_mobile,
+)
 from video_storage import download_full_video
-from play_url import _play_url_candidates, _best_preview_play_url, _merged_video_block
+from play_url import (
+    _play_url_candidates,
+    _best_preview_play_url,
+    _merged_video_block,
+    _has_watermark_free_play_addr,
+)
 from aweme_fields import (
     _aweme_unique_id,
     _hashtags_from_aweme,
@@ -62,6 +71,20 @@ async def process_video(
 
     # 3. 영상 URL 추출
     video_block = _merged_video_block(aweme, aweme)
+
+    # 3a. 워터마크 없는 play_addr가 없으면 모바일 API로 video 블록 보강.
+    # 웹 API는 영상에 따라 download_addr(워터마크)만 주는 경우가 있어,
+    # 경쟁 엑터 parity를 위해 모바일 엔드포인트로 재조회.
+    if not _has_watermark_free_play_addr(video_block):
+        actor.log.info(
+            f"[pipeline] 웹 API에 play_addr 없음 → 모바일 API 폴백 id={video_id}"
+        )
+        mobile_aweme = await fetch_video_detail_mobile(client, video_id, actor)
+        if mobile_aweme:
+            mobile_video = mobile_aweme.get("video")
+            if isinstance(mobile_video, dict) and mobile_video:
+                video_block = {**video_block, **mobile_video}
+
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
 

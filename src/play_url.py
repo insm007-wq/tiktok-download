@@ -368,6 +368,27 @@ def _play_url_candidates(video: dict) -> list[str]:
     return ordered
 
 
+def _has_watermark_free_play_addr(video: dict) -> bool:
+    """Tier A(play_addr) URL 후보가 하나라도 존재하는지 검사.
+
+    False면 다운로드가 Tier C(download_addr, 워터마크 박힘)로 폴백될 수 있음을
+    의미 — 호출자는 이때 모바일 API로 재조회해서 video 블록을 보강해야 함.
+    """
+    if not isinstance(video, dict):
+        return False
+    br = _bit_rate_entries(video)
+    for item in br:
+        if not isinstance(item, dict):
+            continue
+        for pk in ("play_addr", "playAddr", "PlayAddr"):
+            if pk in item and _urls_from_addr_block(item.get(pk)):
+                return True
+    for pk in ("play_addr", "playAddr", "PlayAddr"):
+        if pk in video and _urls_from_addr_block(video.get(pk)):
+            return True
+    return False
+
+
 def _best_preview_play_url(
     play_urls: list[str],
 ) -> tuple[str | None, str | None, list[str]]:

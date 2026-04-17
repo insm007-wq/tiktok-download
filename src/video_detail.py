@@ -23,8 +23,10 @@ from session import (
 from mstoken import resolve_ms_token
 from constants import (
     VIDEO_DETAIL_API_URL,
+    MOBILE_AWEME_DETAIL_URL,
     VERBOSE_DIAG,
     _FIXED_UA,
+    _MOBILE_UA,
 )
 
 
@@ -230,3 +232,96 @@ async def fetch_video_detail_html(
     except Exception as e:
         actor.log.warning(f"[video_detail_html] 요청 실패: {type(e).__name__}: {e}")
         return None
+
+
+async def fetch_video_detail_mobile(
+    client: Any,
+    video_id: str,
+    actor: Actor,
+) -> dict | None:
+    """TikTok 모바일 aweme detail API로 aweme 데이터 조회.
+
+    웹 API가 `play_addr`(워터마크 없음) 대신 `download_addr`(워터마크)만
+    반환하는 영상에 대한 폴백. 모바일 앱 파라미터를 시뮬레이션해 TikTok이
+    정식 앱에 내주는 메타데이터를 받아옴 — 경쟁 엑터 수준의 parity 목적.
+    실패 시 None.
+    """
+    if not getattr(client, "_tt_device_id", None):
+        client._tt_device_id = generate_device_id()
+    device_id = client._tt_device_id
+
+    params = {
+        "aweme_ids": json.dumps([video_id], separators=(",", ":")),
+        "aid": "1233",
+        "app_name": "musical_ly",
+        "channel": "googleplay",
+        "device_platform": "android",
+        "os": "android",
+        "os_version": "13",
+        "device_type": "SM-G998B",
+        "device_id": device_id,
+        "iid": device_id,
+        "version_code": "300904",
+        "version_name": "30.9.4",
+        "build_number": "30.9.4",
+        "manifest_version_code": "2023009040",
+        "update_version_code": "2023009040",
+        "resolution": "1080*2400",
+        "dpi": "420",
+        "language": "en",
+        "region": "US",
+    }
+
+    qs = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+    full_url = f"{MOBILE_AWEME_DETAIL_URL}?{qs}"
+
+    headers = {
+        "User-Agent": _MOBILE_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+    }
+
+    for attempt, imp in enumerate(_IMPERSONATE_ORDER):
+        try:
+            resp = await client.get(
+                full_url,
+                headers=headers,
+                **_req_kw(client, timeout=6.0, impersonate=imp),
+            )
+            if not resp.content:
+                actor.log.warning(
+                    f"[video_detail_mobile] 빈 응답 attempt={attempt + 1} imp={imp}"
+                )
+                continue
+
+            data = resp.json()
+            status_code = data.get("status_code") or data.get("statusCode", 0)
+            if status_code != 0:
+                actor.log.warning(
+                    f"[video_detail_mobile] status={status_code} "
+                    f"msg={data.get('status_msg') or data.get('statusMsg')!r}"
+                )
+                continue
+
+            details = data.get("aweme_details") or []
+            if not isinstance(details, list) or not details:
+                actor.log.warning(
+                    f"[video_detail_mobile] aweme_details 비어있음 keys={list(data.keys())}"
+                )
+                continue
+
+            aweme = details[0]
+            if isinstance(aweme, dict):
+                actor.log.info(
+                    f"[video_detail_mobile] 조회 성공 id={video_id} imp={imp}"
+                )
+                return aweme
+
+        except Exception as e:
+            actor.log.warning(
+                f"[video_detail_mobile] 요청 실패 attempt={attempt + 1}: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    return None

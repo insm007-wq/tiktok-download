@@ -16,7 +16,6 @@ from constants import (
     ACTOR_DOWNLOAD_REVISION,
     KV_SESSION_KEY,
     KV_SESSION_TTL_SEC,
-    VERBOSE_DIAG,
     _FIXED_UA,
 )
 from download_pipeline import process_video
@@ -168,10 +167,24 @@ async def main():
             results = []
 
             async def _process_one(url: str) -> None:
+                # 각 영상 단위로 예외 격리 — 하나 터져도 나머지 병렬 작업 계속.
+                # asyncio.gather(return_exceptions=False) 상위에서 한 건 예외가
+                # 전체를 무너뜨리지 않게 방어.
                 async with sem:
-                    result = await process_video(
-                        actor, client, url, max_size_bytes,
-                    )
+                    try:
+                        result = await process_video(
+                            actor, client, url, max_size_bytes,
+                        )
+                    except Exception as e:
+                        actor.log.error(
+                            f"[pipeline] 처리 중 예외 url={url!r}: "
+                            f"{type(e).__name__}: {e}"
+                        )
+                        result = {
+                            "inputUrl": url,
+                            "downloadStatus": "error",
+                            "error": f"처리 중 예외: {type(e).__name__}",
+                        }
                     if result:
                         results.append(result)
 

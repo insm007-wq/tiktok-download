@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import urllib.parse
 from dataclasses import dataclass, field
@@ -81,12 +82,12 @@ async def download_full_video(
             f"— GET으로 진행"
         )
 
-    # 크기 제한 초과 체크
+    # 크기 제한 초과 체크 — 저장 없이 CDN URL만 반환하는 암묵적 폴백이라 WARN으로 격상
     if content_length > max_size_bytes:
-        actor.log.info(
-            f"[download] id={video_id} 크기 초과 "
-            f"({content_length / 1024 / 1024:.1f}MB > {max_size_bytes / 1024 / 1024:.0f}MB) "
-            f"— CDN URL만 반환"
+        actor.log.warning(
+            f"[download] 크기 초과 — CDN URL만 반환 id={video_id} "
+            f"size={content_length / 1024 / 1024:.1f}MB "
+            f"limit={max_size_bytes / 1024 / 1024:.0f}MB"
         )
         return DownloadResult(
             success=True, video_id=video_id,
@@ -95,13 +96,17 @@ async def download_full_video(
             cdn_url=cdn_url,
         )
 
-    # 2단계: 전체 다운로드
+    # 2단계: 전체 다운로드 — 예외 타입별로 레벨·태그 차등
     try:
         resp = await client.get(
             cdn_url, headers=headers, timeout=DOWNLOAD_TIMEOUT_SEC,
             allow_redirects=True,
         )
         if resp.status_code not in (200, 206):
+            actor.log.error(
+                f"[download] http_err id={video_id} status={resp.status_code} "
+                f"url={cdn_url}"
+            )
             return DownloadResult(
                 success=False, video_id=video_id,
                 storage_type="error",
@@ -110,12 +115,27 @@ async def download_full_video(
             )
         content = resp.content
         if not content:
+            actor.log.error(f"[download] empty_body id={video_id} url={cdn_url}")
             return DownloadResult(
                 success=False, video_id=video_id,
                 storage_type="error", error="빈 응답",
                 cdn_url=cdn_url,
             )
+    except asyncio.TimeoutError:
+        actor.log.error(
+            f"[download] timeout id={video_id} {DOWNLOAD_TIMEOUT_SEC}s url={cdn_url}"
+        )
+        return DownloadResult(
+            success=False, video_id=video_id,
+            storage_type="error",
+            error=f"timeout {DOWNLOAD_TIMEOUT_SEC}s",
+            cdn_url=cdn_url,
+        )
     except Exception as e:
+        actor.log.error(
+            f"[download] network_err id={video_id} "
+            f"{type(e).__name__}: {e} url={cdn_url}"
+        )
         return DownloadResult(
             success=False, video_id=video_id,
             storage_type="error",

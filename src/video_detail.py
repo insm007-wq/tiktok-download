@@ -21,11 +21,7 @@ from session import (
     ensure_ttwid as _ensure_ttwid,
 )
 from mstoken import resolve_ms_token
-from constants import (
-    VIDEO_DETAIL_API_URL,
-    VERBOSE_DIAG,
-    _FIXED_UA,
-)
+from constants import VIDEO_DETAIL_API_URL, _FIXED_UA
 
 
 # chrome131을 선두로 시도 — warmup fallback 순서와 일치시켜 성공률↑.

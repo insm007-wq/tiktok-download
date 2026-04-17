@@ -13,7 +13,6 @@ from video_storage import download_full_video
 from play_url import _play_url_candidates, _best_preview_play_url, _merged_video_block
 from tikwm_api import fetch_tikwm
 from aweme_fields import (
-    _aweme_unique_id,
     _hashtags_from_aweme,
     _statistics_merged,
     _stat_int,
@@ -68,15 +67,38 @@ async def process_video(
 
     # 2. 영상 상세 데이터 조회 — TikTok 웹 API와 TikWM 병렬 호출.
     # TikWM(공개 API)는 워터마크 없는 CDN URL(hdplay/play) 확보용.
+    # return_exceptions=True — 한쪽 태스크가 예외를 던져도 다른 쪽 결과를 살리고
+    # 나머지 폴백 체인(HTML·TikWM 재구성)으로 자연스럽게 복구.
     aweme, tikwm_data = await asyncio.gather(
         fetch_video_detail(client, video_id, actor, ms_token_override=ms_token_override),
         fetch_tikwm(client, raw_url, actor),
+        return_exceptions=True,
     )
+    if isinstance(aweme, BaseException):
+        actor.log.warning(
+            f"[pipeline] 웹 API 예외 id={video_id}: "
+            f"{type(aweme).__name__}: {aweme}"
+        )
+        aweme = None
+    if isinstance(tikwm_data, BaseException):
+        actor.log.warning(
+            f"[pipeline] TikWM 예외 id={video_id}: "
+            f"{type(tikwm_data).__name__}: {tikwm_data}"
+        )
+        tikwm_data = None
+
     if not aweme:
         actor.log.info(f"[pipeline] 웹 API 실패 → HTML 폴백 id={video_id}")
-        aweme = await fetch_video_detail_html(
-            client, video_id, video_input.username, actor,
-        )
+        try:
+            aweme = await fetch_video_detail_html(
+                client, video_id, video_input.username, actor,
+            )
+        except Exception as e:
+            actor.log.warning(
+                f"[pipeline] HTML 폴백 예외 id={video_id}: "
+                f"{type(e).__name__}: {e}"
+            )
+            aweme = None
     if not aweme and tikwm_data:
         actor.log.info(f"[pipeline] 웹·HTML 실패 → TikWM 메타로 재구성 id={video_id}")
         aweme = _aweme_from_tikwm(tikwm_data, video_id)

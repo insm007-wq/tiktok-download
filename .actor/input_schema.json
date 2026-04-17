@@ -9,54 +9,7 @@
       "description": "TikTok video URLs or video IDs. Supports: https://www.tiktok.com/@user/video/123, https://vm.tiktok.com/ZMxxx/, or raw numeric IDs.",
       "editor": "stringList",
       "prefill": [],
-      "minItems": 1,
-      "sectionCaption": "Download",
-      "sectionDescription": "Paste TikTok video URLs to download."
-    },
-    "maxVideoSizeMb": {
-      "title": "Max video size (MB)",
-      "type": "integer",
-      "description": "Maximum video file size to download in MB. Videos larger than this will only have CDN URLs in the output. Max 30MB.",
-      "default": 30,
-      "minimum": 1,
-      "maximum": 30
-    },
-    "maxConcurrentDownloads": {
-      "title": "Parallel downloads",
-      "type": "integer",
-      "description": "Number of videos to download in parallel.",
-      "default": 3,
-      "minimum": 1,
-      "maximum": 10
-    },
-    "proxyConfiguration": {
-      "title": "Proxy",
-      "type": "object",
-      "description": "Apify Proxy configuration. Default uses RESIDENTIAL proxies.",
-      "editor": "proxy",
-      "sectionCaption": "Advanced",
-      "sectionDescription": "These settings work well with defaults. Change only if needed.",
-      "prefill": {
-        "useApifyProxy": true,
-        "apifyProxyGroups": ["RESIDENTIAL"]
-      },
-      "default": {
-        "useApifyProxy": true,
-        "apifyProxyGroups": ["RESIDENTIAL"]
-      }
-    },
-    "useProxy": {
-      "title": "Use residential proxy",
-      "type": "boolean",
-      "description": "Use Apify RESIDENTIAL proxy. Disable to save bandwidth (may get blocked).",
-      "default": true
-    },
-    "msToken": {
-      "title": "msToken (optional)",
-      "type": "string",
-      "description": "TikTok auth token. Leave empty for automatic generation (recommended).",
-      "editor": "textfield",
-      "isSecret": true
+      "minItems": 1
     }
   },
   "required": ["videoUrls"]

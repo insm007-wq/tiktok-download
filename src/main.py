@@ -22,6 +22,12 @@ from constants import (
 from download_pipeline import process_video
 
 
+# 액터 내부 고정 정책 (Store UI 에 노출하지 않음)
+_MAX_VIDEO_SIZE_MB = 30
+_MAX_CONCURRENT = 3
+_PROXY_GROUPS = ["RESIDENTIAL"]
+
+
 async def _kv_load_session(actor: Actor) -> dict:
     """KV Store에서 세션 캐시(ttwid·msToken·device_id)를 불러옵니다."""
     try:
@@ -89,26 +95,14 @@ async def main():
             actor.log.error("다운로드할 영상 URL을 입력해주세요.")
             return
 
-        max_video_size_mb = int(input_data.get("maxVideoSizeMb", 30) or 30)
-        max_video_size_mb = max(1, min(max_video_size_mb, 30))
-        max_size_bytes = max_video_size_mb * 1024 * 1024
+        # 고정 정책 (사용자 입력 대신 액터가 알아서 처리)
+        max_size_bytes = _MAX_VIDEO_SIZE_MB * 1024 * 1024
+        max_concurrent = _MAX_CONCURRENT
 
-        max_concurrent = max(1, min(int(input_data.get("maxConcurrentDownloads", 3) or 3), 10))
-        ms_token_input = (input_data.get("msToken") or "").strip() or None
-        use_proxy = bool(input_data.get("useProxy", True))
-
-        # 프록시 설정
-        if use_proxy:
-            user_proxy_cfg = input_data.get("proxyConfiguration") or {}
-            _pg = user_proxy_cfg.get("apifyProxyGroups") or ["RESIDENTIAL"]
-            _proxy_kwargs: dict[str, Any] = {"groups": _pg}
-            proxy_config = await actor.create_proxy_configuration(**_proxy_kwargs)
-            proxy = await proxy_config.new_url() if proxy_config else None
-            actor.log.info(f"[proxy] groups={_pg} url_ok={bool(proxy)}")
-        else:
-            proxy_config = None
-            proxy = None
-            actor.log.info("[proxy] disabled")
+        # 프록시 설정 — 항상 RESIDENTIAL 고정
+        proxy_config = await actor.create_proxy_configuration(groups=_PROXY_GROUPS)
+        proxy = await proxy_config.new_url() if proxy_config else None
+        actor.log.info(f"[proxy] groups={_PROXY_GROUPS} url_ok={bool(proxy)}")
 
         # KV 세션 캐시 로드
         kv_session = await _kv_load_session(actor)
@@ -148,7 +142,7 @@ async def main():
             # 파이프라인 진입 전에 모두 준비되므로, 순차 대비 ~3초 절감.
             async def _prefetch_ms_token() -> None:
                 existing_ms = (getattr(client, "_tt_ms_token", "") or "").strip()
-                if len(existing_ms) >= 140 or ms_token_input:
+                if len(existing_ms) >= 140:
                     return
                 try:
                     from mstoken_remote import fetch_remote_ms_token
@@ -177,7 +171,6 @@ async def main():
                 async with sem:
                     result = await process_video(
                         actor, client, url, max_size_bytes,
-                        ms_token_override=ms_token_input,
                     )
                     if result:
                         results.append(result)

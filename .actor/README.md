@@ -4,23 +4,20 @@ Download TikTok videos by URL or video ID. Fast, reliable, and production-ready 
 
 ## Features
 
-- **Flexible input** — standard URLs (`https://www.tiktok.com/@user/video/123`), short URLs (`https://vm.tiktok.com/ZMxxx/`), and raw numeric IDs
+- **Just paste URLs** — no configuration, no tokens, no proxy setup. Everything runs on sensible defaults.
+- **Flexible URL formats** — standard URLs (`https://www.tiktok.com/@user/video/123`), short URLs (`https://vm.tiktok.com/ZMxxx/`), and raw numeric IDs
 - **Direct file delivery** — videos up to 30 MB are stored in Apify Key-Value Store with public download links
 - **Large video fallback** — files over 30 MB return signed CDN URLs (valid 12–24 h)
 - **Rich metadata** — author, stats, hashtags, duration, upload time
-- **Batch parallelism** — configurable concurrent downloads (up to 10)
-- **Residential proxy** — uses Apify RESIDENTIAL proxies by default to avoid blocks
+- **Residential proxy** — uses Apify RESIDENTIAL proxies automatically for reliability
 
 ## Input
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `videoUrls` | string[] | ✅ | — | TikTok URLs or video IDs to download |
-| `maxVideoSizeMb` | integer | | 30 | File-size limit (1–30 MB). Larger videos return CDN URL only |
-| `maxConcurrentDownloads` | integer | | 3 | Parallel downloads (1–10) |
-| `useProxy` | boolean | | true | Toggle Apify RESIDENTIAL proxy |
-| `proxyConfiguration` | object | | RESIDENTIAL | Apify Proxy configuration |
-| `msToken` | string | | — | Optional TikTok auth token. Leave empty for automatic generation |
+Single required field. Everything else (proxy, concurrency, size limit, auth tokens) is handled automatically.
+
+| Field | Type | Description |
+|---|---|---|
+| `videoUrls` | string[] | TikTok URLs or video IDs to download |
 
 ### Example input
 
@@ -30,9 +27,7 @@ Download TikTok videos by URL or video ID. Fast, reliable, and production-ready 
     "https://www.tiktok.com/@jtbcnews_official/video/7628806976562072852",
     "https://vm.tiktok.com/ZMxxx/",
     "7628806976562072852"
-  ],
-  "maxVideoSizeMb": 30,
-  "maxConcurrentDownloads": 3
+  ]
 }
 ```
 
@@ -82,10 +77,10 @@ Each result is pushed to the dataset with the following shape:
 
 ## Notes
 
-- TikTok may rate-limit the same IP; RESIDENTIAL proxy mitigates this but residential IP quality varies. Re-run if a specific URL fails.
+- This Actor uses Apify **RESIDENTIAL** proxies automatically. RESIDENTIAL proxy requires a **paid Apify plan** — on the Free plan the Actor will fail to acquire a proxy URL.
+- TikTok may rate-limit the same IP; residential proxy mitigates this but IP quality varies. Re-run if a specific URL fails.
 - Private videos and region-restricted content cannot be downloaded.
 - CDN URLs are time-limited and should be downloaded promptly.
-- Apify Store free plan does not include RESIDENTIAL proxies. Set `useProxy: false` or upgrade your plan if you see proxy errors.
 
 ## Pricing
 

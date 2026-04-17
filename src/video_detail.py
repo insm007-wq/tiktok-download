@@ -28,7 +28,9 @@ from constants import (
 )
 
 
-_IMPERSONATE_ORDER = ("chrome120", "chrome131", "chrome124")
+# chrome131을 선두로 시도 — warmup fallback 순서와 일치시켜 성공률↑.
+# 실측 결과 세 번째 시도(chrome124)는 거의 항상 빈 응답이라 제거.
+_IMPERSONATE_ORDER = ("chrome131", "chrome120")
 
 
 async def fetch_video_detail(

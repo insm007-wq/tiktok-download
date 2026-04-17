@@ -10,12 +10,14 @@ from apify import Actor
 from session import (
     CURL_IMPERSONATE,
     cookie_dict as _cookie_dict,
+    ensure_ttwid,
 )
 from constants import (
     ACTOR_DOWNLOAD_REVISION,
     KV_SESSION_KEY,
     KV_SESSION_TTL_SEC,
     VERBOSE_DIAG,
+    _FIXED_UA,
 )
 from download_pipeline import process_video
 
@@ -141,9 +143,13 @@ async def main():
             if kv_session.get("device_id"):
                 client._tt_device_id = kv_session["device_id"]
 
-            # KV 캐시 없으면 Railway /mstoken 에서 획득
-            existing_ms = (getattr(client, "_tt_ms_token", "") or "").strip()
-            if len(existing_ms) < 140 and not ms_token_input:
+            # 병렬 prefetch: Railway msToken + TikTok 세션 웜업을 동시에 진행.
+            # 두 호출 모두 client 에 쓰는 키가 겹치지 않고(msToken vs ttwid/tt_chain_token)
+            # 파이프라인 진입 전에 모두 준비되므로, 순차 대비 ~3초 절감.
+            async def _prefetch_ms_token() -> None:
+                existing_ms = (getattr(client, "_tt_ms_token", "") or "").strip()
+                if len(existing_ms) >= 140 or ms_token_input:
+                    return
                 try:
                     from mstoken_remote import fetch_remote_ms_token
                     _rmt = await fetch_remote_ms_token(client, actor)
@@ -154,6 +160,14 @@ async def main():
                             pass
                 except Exception as e:
                     actor.log.warning(f"[mstoken] 원격 획득 실패: {type(e).__name__}: {e}")
+
+            async def _prewarm_session() -> None:
+                try:
+                    await ensure_ttwid(client, _FIXED_UA, actor)
+                except Exception as e:
+                    actor.log.warning(f"[session] 사전 웜업 실패: {type(e).__name__}: {e}")
+
+            await asyncio.gather(_prefetch_ms_token(), _prewarm_session())
 
             # 배치 다운로드
             sem = asyncio.Semaphore(max_concurrent)

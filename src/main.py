@@ -194,13 +194,27 @@ async def main():
                     f"[DEADLINE] {_DEADLINE_SEC}s 도달 — 완료된 결과만 반환"
                 )
 
-            # Dataset에 결과 push
+            # Dataset에 결과 push — 과금 공정성: 성공 건만 push.
+            # 실패 건은 각 파이프라인 경로에서 이미 error/warning 으로 로그됨.
             if results:
-                await actor.push_data(results)
-                success_count = sum(1 for r in results if r.get("downloadStatus") == "success")
+                successful = [r for r in results if r.get("downloadStatus") == "success"]
+                failed = [r for r in results if r.get("downloadStatus") != "success"]
+
+                if successful:
+                    await actor.push_data(successful)
+
+                if failed:
+                    sample = [
+                        {"url": r.get("inputUrl") or r.get("id"), "error": r.get("error")}
+                        for r in failed[:5]
+                    ]
+                    actor.log.warning(
+                        f"[pricing] 실패 {len(failed)}건 dataset 제외(과금 없음) sample={sample}"
+                    )
+
                 actor.log.info(
-                    f"완료: {success_count}/{len(results)} 성공 "
-                    f"(전체 {len(video_urls)}개 요청)"
+                    f"완료: {len(successful)}/{len(results)} 성공 "
+                    f"(전체 {len(video_urls)}개 요청, dataset push={len(successful)})"
                 )
             else:
                 actor.log.warning("다운로드 결과 없음")

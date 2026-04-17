@@ -89,7 +89,7 @@ Each result is pushed to the dataset with the following shape:
 
 ## Pricing
 
-Charged per result (successful or failed). Platform usage (compute, proxy bandwidth) is billed separately by Apify.
+Charged only for **successful** downloads. Failed requests (invalid URL, private video, region block, CDN error) are logged but excluded from the dataset and **not billed**. Platform usage (compute, proxy bandwidth) is billed separately by Apify.
 
 ## Support
 

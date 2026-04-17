@@ -16,7 +16,6 @@ from play_url import (
     _play_url_candidates,
     _best_preview_play_url,
     _merged_video_block,
-    _has_watermark_free_play_addr,
 )
 from aweme_fields import (
     _aweme_unique_id,
@@ -69,21 +68,15 @@ async def process_video(
             "error": "영상 데이터를 조회할 수 없습니다. URL이 유효한지 확인해주세요.",
         }
 
-    # 3. 영상 URL 추출
+    # 3. 영상 URL 추출 — 웹/HTML의 playAddr가 워터마크 박힌 URL로 떨어지는
+    # 케이스가 있어, 모바일 aweme detail API를 항상 호출해 video 블록을 덮어씀.
+    # 메타(author/stats/음악 등)는 웹 응답 유지 — 모바일 스키마 차이 리스크 회피.
     video_block = _merged_video_block(aweme, aweme)
-
-    # 3a. 워터마크 없는 play_addr가 없으면 모바일 API로 video 블록 보강.
-    # 웹 API는 영상에 따라 download_addr(워터마크)만 주는 경우가 있어,
-    # 경쟁 엑터 parity를 위해 모바일 엔드포인트로 재조회.
-    if not _has_watermark_free_play_addr(video_block):
-        actor.log.info(
-            f"[pipeline] 웹 API에 play_addr 없음 → 모바일 API 폴백 id={video_id}"
-        )
-        mobile_aweme = await fetch_video_detail_mobile(client, video_id, actor)
-        if mobile_aweme:
-            mobile_video = mobile_aweme.get("video")
-            if isinstance(mobile_video, dict) and mobile_video:
-                video_block = {**video_block, **mobile_video}
+    mobile_aweme = await fetch_video_detail_mobile(client, video_id, actor)
+    if mobile_aweme:
+        mobile_video = mobile_aweme.get("video")
+        if isinstance(mobile_video, dict) and mobile_video:
+            video_block = {**video_block, **mobile_video}
 
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
@@ -97,6 +90,12 @@ async def process_video(
         )
 
     cdn_url = primary_url or (candidates[0] if candidates else None)
+    # 진단: 선택된 URL 도메인 — play_addr 계열(v16/v19/tiktokcdn)인지
+    # download_addr 계열(api*.tiktokv)인지 한 눈에 확인용.
+    if cdn_url:
+        from urllib.parse import urlparse
+        host = urlparse(cdn_url).netloc
+        actor.log.info(f"[pipeline] 선택 cdn_url host={host} id={video_id}")
 
     # 4. 전체 다운로드
     cookies = _cookie_dict(client)

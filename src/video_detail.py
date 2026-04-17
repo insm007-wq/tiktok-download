@@ -103,13 +103,16 @@ async def fetch_video_detail(
             resp = await client.get(
                 full_url,
                 headers=headers,
-                **_req_kw(client, timeout=15.0, impersonate=imp),
+                **_req_kw(client, timeout=5.0, impersonate=imp),
             )
             if not resp.content:
+                # 빈 응답은 임펄세네이트 로테이션으로 복구되지 않는 경향이 큼
+                # (X-Bogus/msToken 단계에서 이미 걸러진 상태). 즉시 HTML 폴백으로 전환.
                 actor.log.warning(
-                    f"[video_detail] API 빈 응답 attempt={attempt + 1} imp={imp}"
+                    f"[video_detail] API 빈 응답 attempt={attempt + 1} imp={imp} "
+                    f"→ 남은 재시도 스킵, HTML 폴백으로 전환"
                 )
-                continue
+                return None
 
             data = resp.json()
             status_code = data.get("statusCode") or data.get("status_code", 0)
@@ -176,7 +179,7 @@ async def fetch_video_detail_html(
         resp = await client.get(
             url,
             headers=headers,
-            **_req_kw(client, timeout=20.0),
+            **_req_kw(client, timeout=12.0),
         )
         html = resp.text or ""
         if not html:

@@ -49,31 +49,35 @@ async def process_video(
     video_id = video_input.video_id
     actor.log.info(f"[pipeline] 처리 시작 id={video_id} url={video_input.original}")
 
-    # 2. 영상 상세 데이터 조회 (API 우선, HTML 폴백)
+    # 2. 영상 상세 데이터 조회 (웹 API → HTML → 모바일 순)
     aweme = await fetch_video_detail(
         client, video_id, actor, ms_token_override=ms_token_override,
     )
     if not aweme:
-        actor.log.info(f"[pipeline] API 실패 → HTML 폴백 id={video_id}")
+        actor.log.info(f"[pipeline] 웹 API 실패 → HTML 폴백 id={video_id}")
         aweme = await fetch_video_detail_html(
             client, video_id, video_input.username, actor,
         )
 
-    if not aweme:
-        actor.log.error(f"[pipeline] 영상 데이터 조회 실패 id={video_id}")
-        return {
-            "id": video_id,
-            "inputUrl": raw_url,
-            "downloadStatus": "error",
-            "error": "영상 데이터를 조회할 수 없습니다. URL이 유효한지 확인해주세요.",
-        }
-
-    # 3. 영상 URL 추출 — 웹/HTML의 playAddr가 워터마크 박힌 URL로 떨어지는
-    # 케이스가 있어, 모바일 aweme detail API를 항상 호출해 video 블록을 덮어씀.
-    # 메타(author/stats/음악 등)는 웹 응답 유지 — 모바일 스키마 차이 리스크 회피.
-    video_block = _merged_video_block(aweme, aweme)
+    # 모바일 API는 두 역할: (1) 웹·HTML 모두 실패 시 aweme 전체 폴백,
+    # (2) 웹 성공 시 워터마크 없는 play_addr 확보용 video 블록 덮어쓰기.
     mobile_aweme = await fetch_video_detail_mobile(client, video_id, actor)
-    if mobile_aweme:
+
+    if not aweme:
+        if not mobile_aweme:
+            actor.log.error(f"[pipeline] 영상 데이터 조회 실패 id={video_id}")
+            return {
+                "id": video_id,
+                "inputUrl": raw_url,
+                "downloadStatus": "error",
+                "error": "영상 데이터를 조회할 수 없습니다. URL이 유효한지 확인해주세요.",
+            }
+        actor.log.info(f"[pipeline] 웹·HTML 실패 → 모바일 aweme 사용 id={video_id}")
+        aweme = mobile_aweme
+
+    # 3. 영상 URL 추출
+    video_block = _merged_video_block(aweme, aweme)
+    if mobile_aweme and mobile_aweme is not aweme:
         mobile_video = mobile_aweme.get("video")
         if isinstance(mobile_video, dict) and mobile_video:
             video_block = {**video_block, **mobile_video}

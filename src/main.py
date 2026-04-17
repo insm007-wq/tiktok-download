@@ -109,7 +109,7 @@ async def main():
 
         actor.log.info(
             f"영상 {len(video_urls)}개 다운로드 시작 | "
-            f"max_size={max_video_size_mb}MB | concurrent={max_concurrent} | "
+            f"max_size={_MAX_VIDEO_SIZE_MB}MB | concurrent={max_concurrent} | "
             f"proxy={'on' if proxy else 'off'} | "
             f"kv_cache={'hit' if kv_session.get('ttwid') else 'miss'}"
         )

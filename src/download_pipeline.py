@@ -6,17 +6,9 @@ from typing import Any
 from apify import Actor
 
 from url_parser import parse_video_input
-from video_detail import (
-    fetch_video_detail,
-    fetch_video_detail_html,
-    fetch_video_detail_mobile,
-)
+from video_detail import fetch_video_detail, fetch_video_detail_html
 from video_storage import download_full_video
-from play_url import (
-    _play_url_candidates,
-    _best_preview_play_url,
-    _merged_video_block,
-)
+from play_url import _play_url_candidates, _best_preview_play_url, _merged_video_block
 from aweme_fields import (
     _aweme_unique_id,
     _hashtags_from_aweme,
@@ -49,39 +41,27 @@ async def process_video(
     video_id = video_input.video_id
     actor.log.info(f"[pipeline] 처리 시작 id={video_id} url={video_input.original}")
 
-    # 2. 영상 상세 데이터 조회 (웹 API → HTML → 모바일 순)
+    # 2. 영상 상세 데이터 조회 (API 우선, HTML 폴백)
     aweme = await fetch_video_detail(
         client, video_id, actor, ms_token_override=ms_token_override,
     )
     if not aweme:
-        actor.log.info(f"[pipeline] 웹 API 실패 → HTML 폴백 id={video_id}")
+        actor.log.info(f"[pipeline] API 실패 → HTML 폴백 id={video_id}")
         aweme = await fetch_video_detail_html(
             client, video_id, video_input.username, actor,
         )
 
-    # 모바일 API는 두 역할: (1) 웹·HTML 모두 실패 시 aweme 전체 폴백,
-    # (2) 웹 성공 시 워터마크 없는 play_addr 확보용 video 블록 덮어쓰기.
-    mobile_aweme = await fetch_video_detail_mobile(client, video_id, actor)
-
     if not aweme:
-        if not mobile_aweme:
-            actor.log.error(f"[pipeline] 영상 데이터 조회 실패 id={video_id}")
-            return {
-                "id": video_id,
-                "inputUrl": raw_url,
-                "downloadStatus": "error",
-                "error": "영상 데이터를 조회할 수 없습니다. URL이 유효한지 확인해주세요.",
-            }
-        actor.log.info(f"[pipeline] 웹·HTML 실패 → 모바일 aweme 사용 id={video_id}")
-        aweme = mobile_aweme
+        actor.log.error(f"[pipeline] 영상 데이터 조회 실패 id={video_id}")
+        return {
+            "id": video_id,
+            "inputUrl": raw_url,
+            "downloadStatus": "error",
+            "error": "영상 데이터를 조회할 수 없습니다. URL이 유효한지 확인해주세요.",
+        }
 
     # 3. 영상 URL 추출
     video_block = _merged_video_block(aweme, aweme)
-    if mobile_aweme and mobile_aweme is not aweme:
-        mobile_video = mobile_aweme.get("video")
-        if isinstance(mobile_video, dict) and mobile_video:
-            video_block = {**video_block, **mobile_video}
-
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
 
@@ -94,8 +74,9 @@ async def process_video(
         )
 
     cdn_url = primary_url or (candidates[0] if candidates else None)
-    # 진단: 선택된 URL 도메인 — play_addr 계열(v16/v19/tiktokcdn)인지
-    # download_addr 계열(api*.tiktokv)인지 한 눈에 확인용.
+    # 진단: 선택된 URL 도메인 — 워터마크 여부 추적용.
+    # play_addr 계열: v16-webapp-prime / v16m-default / v19.tiktokcdn-us (워터마크 없음)
+    # download_addr 계열: api*.tiktokv.com 또는 specific 경로 (워터마크 있음)
     if cdn_url:
         from urllib.parse import urlparse
         host = urlparse(cdn_url).netloc

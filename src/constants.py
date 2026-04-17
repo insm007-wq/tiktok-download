@@ -14,18 +14,6 @@ SEARCH_API_URL = "https://www.tiktok.com/api/search/item/full/"
 VIDEO_DETAIL_API_URL = "https://www.tiktok.com/api/item/detail/"
 ACTOR_DOWNLOAD_REVISION = "20260417_v1"
 
-# 모바일 aweme detail API — 웹 API가 play_addr(워터마크 없음)를 안 주는
-# 영상에 대해 폴백으로 사용. 공유용 download_addr(워터마크 박힘) 대신
-# play_addr를 확보해 경쟁 엑터 수준의 일관성 달성.
-MOBILE_AWEME_DETAIL_URL = (
-    "https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/multi/aweme/detail/"
-)
-_MOBILE_UA = (
-    "com.zhiliaoapp.musically/2023009040 "
-    "(Linux; U; Android 13; en_US; SM-G998B; "
-    "Build/TP1A.220624.014; Cronet/58.0.2991.0)"
-)
-
 # KV Store 레코드 최대 크기 (9MB)
 MAX_KV_RECORD_BYTES = 9 * 1024 * 1024
 

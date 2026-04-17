@@ -1,0 +1,14 @@
+{
+  "actorSpecification": 1,
+  "name": "tiktok-download",
+  "title": "TikTok Video Download",
+  "description": "Download TikTok videos by URL. Supports standard URLs, short URLs (vm.tiktok.com), and video IDs. Videos up to 30MB are stored in KV Store with public download links. Larger videos return CDN URLs (valid 12-24h).",
+  "version": "0.1",
+  "buildTag": "latest",
+  "environmentVariables": {
+    "TIKTOK_PREVIEW_PROXY_BASE": "https://proxyapify-production-d4c5.up.railway.app/?url=",
+    "TIKTOK_MSTOKEN_URL": "https://proxyapify-production-d4c5.up.railway.app/mstoken",
+    "TIKTOK_MSTOKEN_API_KEY": ""
+  },
+  "dockerfile": "../Dockerfile"
+}

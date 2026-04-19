@@ -9,12 +9,6 @@ ACTOR_DOWNLOAD_REVISION = "20260417_v1"
 TIKWM_API_URL = "https://tikwm.com/api/"
 TIKWM_TIMEOUT_SEC = 5.0
 
-# KV Store 레코드 최대 크기 (9MB)
-MAX_KV_RECORD_BYTES = 9 * 1024 * 1024
-
-# 다운로드 타임아웃 (초)
-DOWNLOAD_TIMEOUT_SEC = 120
-
 # KV Store 세션 캐싱
 KV_SESSION_KEY = "tiktok_session_cache"
 KV_SESSION_TTL_SEC = 12 * 3600

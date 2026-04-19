@@ -1,20 +1,23 @@
-"""전체 영상 다운로드 + Apify KV Store 저장.
+"""TikTok CDN URL 검증 + 반환 (영상 바이트 다운로드 안 함).
 
-- <= 9MB: 단일 KV Store 레코드
-- 9MB ~ 30MB: 청크 분할 저장 (각 청크 최대 9MB)
-- > 설정 상한: CDN URL만 반환
+유저 사용 패턴: 엑터 실행 후 dataset에서 URL 받아 즉시 다운로드. 24시간 뒤에
+쓰는 케이스 거의 없음 → CDN URL(12~24h 유효) 만 반환해도 충분.
+
+과거 구현은 영상을 먼저 다운로드해서 Apify KV Store에 저장했으나:
+- 9MB 초과는 쪼개면 MP4가 깨져 재생 불가 (moov atom 누락, 앞부분만 재생)
+- 프록시 대역폭 + KV 저장 비용이 크게 들어감
+- 유저는 즉시 받으니 영구 저장 이득 없음
+
+결론: HEAD로 파일 크기만 확인하고 CDN URL을 바로 반환. run 시간·원가 모두 절감.
 """
 from __future__ import annotations
 
-import asyncio
-import os
-import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
 from apify import Actor
 
-from constants import MAX_KV_RECORD_BYTES, DOWNLOAD_TIMEOUT_SEC, _FIXED_UA
+from constants import _FIXED_UA
 
 
 @dataclass
@@ -22,20 +25,12 @@ class DownloadResult:
     success: bool
     video_id: str
     file_size_bytes: int = 0
-    storage_type: str = ""        # "kv_store" | "kv_store_chunked" | "cdn_url_only" | "error"
-    download_url: str | None = None       # 단일 KV URL (단일 저장 시)
-    download_urls: list[str] = field(default_factory=list)  # 청크 URL 목록
+    storage_type: str = ""        # "cdn_url_only" | "error"
+    download_url: str | None = None       # TikTok CDN URL (유저가 직접 다운로드)
+    download_urls: list[str] = field(default_factory=list)  # 동일 URL 단일 원소
     chunk_count: int = 0
     cdn_url: str | None = None
     error: str | None = None
-
-
-def _kv_public_url(store_id: str, key: str) -> str:
-    """Apify KV Store 공개 URL."""
-    return (
-        f"https://api.apify.com/v2/key-value-stores/"
-        f"{store_id}/records/{urllib.parse.quote(key, safe='')}"
-    )
 
 
 async def download_full_video(
@@ -46,23 +41,26 @@ async def download_full_video(
     cookie_str: str | None,
     max_size_bytes: int,
 ) -> DownloadResult:
-    """CDN에서 전체 영상 다운로드 → KV Store 저장 → 공개 URL 반환."""
+    """CDN URL을 HEAD로 검증하고 바로 반환. 실제 바이트 다운로드는 하지 않음.
+
+    `cookie_str`·`max_size_bytes` 는 과거 다운로드 파이프라인 호환용으로만 유지.
+    """
     if not cdn_url or not video_id:
         return DownloadResult(
             success=False, video_id=video_id,
             storage_type="error", error="cdn_url 또는 video_id 누락",
         )
 
-    ua = _FIXED_UA
     headers = {
-        "User-Agent": ua,
+        "User-Agent": _FIXED_UA,
         "Referer": "https://www.tiktok.com/",
         "Accept": "*/*",
     }
     if cookie_str:
         headers["Cookie"] = cookie_str
 
-    # 1단계: HEAD 요청으로 파일 크기 확인
+    # HEAD 요청으로 파일 크기·접근성만 확인. 실패해도 URL은 반환 — 유저가
+    # 직접 시도할 수 있도록.
     content_length = 0
     try:
         head_resp = await client.head(
@@ -76,148 +74,34 @@ async def download_full_video(
                 f"[download] id={video_id} content-length={content_length} "
                 f"({content_length / 1024 / 1024:.1f}MB)"
             )
+        # 4xx/5xx면 CDN URL 자체가 깨졌을 가능성 — 경고만 남기고 URL은 반환.
+        status = getattr(head_resp, "status_code", 0)
+        if status and status >= 400:
+            actor.log.warning(
+                f"[download] HEAD status={status} id={video_id} "
+                f"— URL 유효성 의심, 유저 브라우저에서 실패할 수 있음"
+            )
     except Exception as e:
         actor.log.warning(
             f"[download] HEAD 실패 id={video_id}: {type(e).__name__}: {e} "
-            f"— GET으로 진행"
+            f"— CDN URL 그대로 반환"
         )
 
-    # 크기 제한 초과 체크 — 저장 없이 CDN URL만 반환하는 암묵적 폴백이라 WARN으로 격상
-    if content_length > max_size_bytes:
-        actor.log.warning(
-            f"[download] 크기 초과 — CDN URL만 반환 id={video_id} "
-            f"size={content_length / 1024 / 1024:.1f}MB "
-            f"limit={max_size_bytes / 1024 / 1024:.0f}MB"
-        )
-        return DownloadResult(
-            success=True, video_id=video_id,
-            file_size_bytes=content_length,
-            storage_type="cdn_url_only",
-            cdn_url=cdn_url,
+    # 대역폭 안전장치 기록용 — max_size_bytes 초과 시 경고만. 어차피 바이트 안 받음.
+    if content_length and content_length > max_size_bytes:
+        actor.log.info(
+            f"[download] 크기 {content_length / 1024 / 1024:.1f}MB > "
+            f"limit {max_size_bytes / 1024 / 1024:.0f}MB (안내용)"
         )
 
-    # 2단계: 전체 다운로드 — 예외 타입별로 레벨·태그 차등
-    try:
-        resp = await client.get(
-            cdn_url, headers=headers, timeout=DOWNLOAD_TIMEOUT_SEC,
-            allow_redirects=True,
-        )
-        if resp.status_code not in (200, 206):
-            actor.log.error(
-                f"[download] http_err id={video_id} status={resp.status_code} "
-                f"url={cdn_url}"
-            )
-            return DownloadResult(
-                success=False, video_id=video_id,
-                storage_type="error",
-                error=f"HTTP {resp.status_code}",
-                cdn_url=cdn_url,
-            )
-        content = resp.content
-        if not content:
-            actor.log.error(f"[download] empty_body id={video_id} url={cdn_url}")
-            return DownloadResult(
-                success=False, video_id=video_id,
-                storage_type="error", error="빈 응답",
-                cdn_url=cdn_url,
-            )
-    except asyncio.TimeoutError:
-        actor.log.error(
-            f"[download] timeout id={video_id} {DOWNLOAD_TIMEOUT_SEC}s url={cdn_url}"
-        )
-        return DownloadResult(
-            success=False, video_id=video_id,
-            storage_type="error",
-            error=f"timeout {DOWNLOAD_TIMEOUT_SEC}s",
-            cdn_url=cdn_url,
-        )
-    except Exception as e:
-        actor.log.error(
-            f"[download] network_err id={video_id} "
-            f"{type(e).__name__}: {e} url={cdn_url}"
-        )
-        return DownloadResult(
-            success=False, video_id=video_id,
-            storage_type="error",
-            error=f"{type(e).__name__}: {e}",
-            cdn_url=cdn_url,
-        )
-
-    file_size = len(content)
-    actor.log.info(f"[download] id={video_id} 다운로드 완료 {file_size} bytes")
-
-    # 다운로드 후 크기 재확인
-    if file_size > max_size_bytes:
-        return DownloadResult(
-            success=True, video_id=video_id,
-            file_size_bytes=file_size,
-            storage_type="cdn_url_only",
-            cdn_url=cdn_url,
-        )
-
-    # 3단계: KV Store 저장
-    store_id = (os.environ.get("APIFY_DEFAULT_KEY_VALUE_STORE_ID") or "").strip()
-    if not store_id:
-        # Named KV Store 사용
-        try:
-            store = await actor.open_key_value_store(name="tiktok-downloads")
-            # store ID를 환경에서 가져올 수 없으면 store 객체에서 추출
-            store_id = getattr(store, 'id', '') or ''
-        except Exception:
-            store = await actor.open_key_value_store()
-    else:
-        store = await actor.open_key_value_store()
-
-    try:
-        if file_size <= MAX_KV_RECORD_BYTES:
-            # 단일 레코드 저장
-            key = f"video_{video_id}.mp4"
-            await store.set_value(key, content, content_type="video/mp4")
-            url = _kv_public_url(store_id, key) if store_id else None
-            actor.log.info(f"[download] KV 저장 완료 id={video_id} key={key}")
-            return DownloadResult(
-                success=True, video_id=video_id,
-                file_size_bytes=file_size,
-                storage_type="kv_store",
-                download_url=url,
-                download_urls=[url] if url else [],
-                chunk_count=1,
-                cdn_url=cdn_url,
-            )
-        else:
-            # 청크 분할 저장
-            chunk_size = MAX_KV_RECORD_BYTES
-            chunks = []
-            for i in range(0, file_size, chunk_size):
-                chunk_data = content[i:i + chunk_size]
-                key = f"video_{video_id}_part{len(chunks)}.mp4"
-                await store.set_value(key, chunk_data, content_type="video/mp4")
-                url = _kv_public_url(store_id, key) if store_id else None
-                chunks.append(url)
-                actor.log.info(
-                    f"[download] 청크 저장 id={video_id} part={len(chunks) - 1} "
-                    f"bytes={len(chunk_data)}"
-                )
-
-            actor.log.info(
-                f"[download] 청크 저장 완료 id={video_id} chunks={len(chunks)}"
-            )
-            return DownloadResult(
-                success=True, video_id=video_id,
-                file_size_bytes=file_size,
-                storage_type="kv_store_chunked",
-                download_url=chunks[0] if chunks else None,
-                download_urls=[u for u in chunks if u],
-                chunk_count=len(chunks),
-                cdn_url=cdn_url,
-            )
-
-    except Exception as e:
-        actor.log.warning(f"[download] KV 저장 실패 id={video_id}: {type(e).__name__}: {e}")
-        return DownloadResult(
-            success=False, video_id=video_id,
-            file_size_bytes=file_size,
-            storage_type="error",
-            error=f"KV 저장 실패: {type(e).__name__}: {e}",
-            cdn_url=cdn_url,
-        )
+    actor.log.info(f"[download] CDN URL 반환 id={video_id}")
+    return DownloadResult(
+        success=True,
+        video_id=video_id,
+        file_size_bytes=content_length,
+        storage_type="cdn_url_only",
+        download_url=cdn_url,
+        download_urls=[cdn_url],
+        chunk_count=1,
+        cdn_url=cdn_url,
+    )

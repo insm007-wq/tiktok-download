@@ -138,15 +138,24 @@ async def process_video(
         codecs_str = ", ".join(f"{c}@{b}" for c, b in codec_list[:5])
         actor.log.info(f"[pipeline] codec_candidates id={video_id} [{codecs_str}]")
 
-    # TikWM URL 확보 (코덱 보증 없음)
-    tikwm_url = None
-    if tikwm_data:
-        tikwm_url = tikwm_data.get("hdplay") or tikwm_data.get("play")
-
     # 1순위: bit_rate 엔트리의 codec_type=h264 (메타 신뢰)
     h264_from_bitrate = _h264_url_from_bitrate(video_block)
     # 2순위: URL 경로에 `_h264_` 박힌 것 (패턴 신뢰)
     safe_h264 = _first_safe_h264_url(play_urls)
+
+    # TikWM URL 선택 — hdplay는 가끔 bytevc2(재생 실패)라서
+    # bit_rate 메타로 h264 확인된 케이스에서만 hdplay(HD) 써도 안전.
+    # bit_rate 없으면(HTML 폴백 실패 시 TikWM 메타만 있는 상황) → `play`(표준 H.264) 우선.
+    tikwm_url = None
+    tikwm_pick = ""
+    if tikwm_data:
+        has_h264_meta = bool(h264_from_bitrate or safe_h264)
+        if has_h264_meta:
+            tikwm_url = tikwm_data.get("hdplay") or tikwm_data.get("play")
+            tikwm_pick = "hdplay_pref"
+        else:
+            tikwm_url = tikwm_data.get("play") or tikwm_data.get("hdplay")
+            tikwm_pick = "play_pref_no_meta"
 
     cdn_url: str | None = None
     url_source = "unknown"
@@ -190,7 +199,7 @@ async def process_video(
         )
     elif url_source == "tikwm":
         actor.log.info(
-            f"[pipeline] ✅ no-watermark path id={video_id} source=tikwm(hdplay/play) "
+            f"[pipeline] ✅ no-watermark path id={video_id} source=tikwm({tikwm_pick}) "
             f"host={host} codec={picked_codec} wm={picked_wm}"
         )
     else:

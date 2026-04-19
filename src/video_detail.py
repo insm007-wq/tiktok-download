@@ -144,7 +144,12 @@ async def fetch_video_detail_html(
     username: str,
     actor: Actor,
 ) -> dict | None:
-    """HTML 페이지에서 __UNIVERSAL_DATA_FOR_REHYDRATION__ 파싱으로 aweme 데이터 추출."""
+    """HTML 페이지에서 __UNIVERSAL_DATA_FOR_REHYDRATION__ 파싱으로 aweme 데이터 추출.
+
+    RESIDENTIAL 프록시의 간헐적 `CONNECT tunnel failed` 에러 → 1회 재시도. 재시도 없이
+    즉시 실패하면 TikWM 메타로 aweme 재구성 → bit_rate 없어서 코덱 확인 불가 → bytevc2
+    다운로드 위험. 재시도로 HTML 성공률 올려서 bit_rate 확보하는 게 가장 안전한 길.
+    """
     ua = _FIXED_UA
     if username:
         url = f"https://www.tiktok.com/@{username}/video/{video_id}"
@@ -171,17 +176,49 @@ async def fetch_video_detail_html(
         "Accept-Encoding": "gzip, deflate, br",
     }
 
-    try:
-        resp = await client.get(
-            url,
-            headers=headers,
-            **_req_kw(client, timeout=12.0),
-        )
-        html = resp.text or ""
-        if not html:
-            actor.log.warning("[video_detail_html] 빈 HTML 응답")
+    # 프록시 세션 이슈(590 CONNECT tunnel failed 등)는 재시도로 거의 해결됨.
+    # 최대 2회 시도, 실패 분류는 메시지 문자열로.
+    html: str | None = None
+    last_err: str | None = None
+    for attempt in range(1, 3):
+        try:
+            resp = await client.get(
+                url,
+                headers=headers,
+                **_req_kw(client, timeout=12.0),
+            )
+            html = resp.text or ""
+            if not html:
+                actor.log.warning(f"[video_detail_html] 빈 HTML 응답 attempt={attempt}")
+                last_err = "empty_html"
+                continue
+            break
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            err_msg = str(e).lower()
+            # proxy·tunnel·connection 계열은 재시도 가치 있음. timeout도 재시도.
+            retriable = (
+                "tunnel" in err_msg
+                or "connect" in err_msg
+                or "proxyerror" in err_msg
+                or "timeout" in err_msg
+                or "reset" in err_msg
+                or "curl" in err_msg
+            )
+            if attempt < 2 and retriable:
+                actor.log.warning(
+                    f"[video_detail_html] 재시도 attempt={attempt} "
+                    f"err={type(e).__name__}: {e}"
+                )
+                continue
+            actor.log.warning(f"[video_detail_html] 요청 실패 attempt={attempt}: {last_err}")
             return None
 
+    if not html:
+        actor.log.warning(f"[video_detail_html] HTML 확보 실패: {last_err}")
+        return None
+
+    try:
         # __UNIVERSAL_DATA_FOR_REHYDRATION__ 추출
         import re
         pattern = r'<script\s+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>'
@@ -224,5 +261,5 @@ async def fetch_video_detail_html(
         actor.log.warning(f"[video_detail_html] JSON 파싱 실패: {e}")
         return None
     except Exception as e:
-        actor.log.warning(f"[video_detail_html] 요청 실패: {type(e).__name__}: {e}")
+        actor.log.warning(f"[video_detail_html] 파싱 중 에러: {type(e).__name__}: {e}")
         return None

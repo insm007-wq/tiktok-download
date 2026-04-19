@@ -15,6 +15,8 @@ from play_url import (
     _best_preview_play_url,
     _merged_video_block,
     _codec_summary,
+    _classify_url,
+    _first_safe_h264_url,
 )
 from tikwm_api import fetch_tikwm
 from aweme_fields import (
@@ -117,7 +119,12 @@ async def process_video(
             "error": "영상 데이터를 조회할 수 없습니다. URL이 유효한지 확인해주세요.",
         }
 
-    # 3. 영상 URL 결정 — TikWM(hdplay/play) 우선, 없으면 TikTok CDN.
+    # 3. 영상 URL 결정 — 다층 방어 fallback (yt-dlp 방식 참고).
+    # 우선순위:
+    #   1. bit_rate의 URL 중 `_h264_` 박힌 확정 h264 + 워터마크 "yes" 아닌 것
+    #   2. TikWM hdplay/play (워터마크는 없지만 코덱 보증 없음 — bytevc2일 수 있음)
+    #   3. bit_rate 정렬 1순위 (URL 코덱·워터마크 기반 정렬됨)
+    #   4. 최후 fallback
     video_block = _merged_video_block(aweme, aweme)
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
@@ -129,12 +136,25 @@ async def process_video(
         codecs_str = ", ".join(f"{c}@{b}" for c, b in codec_list[:5])
         actor.log.info(f"[pipeline] codec_candidates id={video_id} [{codecs_str}]")
 
+    # TikWM URL 확보 (코덱 보증 없음)
     tikwm_url = None
     if tikwm_data:
         tikwm_url = tikwm_data.get("hdplay") or tikwm_data.get("play")
 
-    cdn_url = tikwm_url or fallback_cdn
-    url_source = "tikwm" if tikwm_url else "tiktok_cdn"
+    # 1순위: bit_rate 중 확정 h264 + 워터마크 "yes" 아님
+    safe_h264 = _first_safe_h264_url(play_urls)
+
+    cdn_url: str | None = None
+    url_source = "unknown"
+    if safe_h264:
+        cdn_url = safe_h264
+        url_source = "play_addr_h264"
+    elif tikwm_url:
+        cdn_url = tikwm_url
+        url_source = "tikwm"
+    elif fallback_cdn:
+        cdn_url = fallback_cdn
+        url_source = "tiktok_cdn_sorted"
 
     if not cdn_url:
         actor.log.error(f"[pipeline] 재생 URL 없음 id={video_id}")
@@ -144,19 +164,34 @@ async def process_video(
             error="영상 재생 URL을 찾을 수 없습니다.",
         )
 
-    # 진단: 워터마크 소스 추적용. tikwm = 워터마크 없음(hdplay/play),
-    # tiktok_cdn 폴백은 워터마크 박힌 URL일 위험 구간 — WARN으로 구분.
+    # 진단: 선택된 URL의 코덱·워터마크 분류.
+    classified = _classify_url(cdn_url)
     host = urlparse(cdn_url).netloc
-    if url_source == "tikwm":
+    picked_codec = classified["codec"]
+    picked_wm = classified["watermark"]
+
+    # bytevc2 URL이 실제로 선택되면 심각한 문제 — 정렬·필터 로직 회귀 의심.
+    if picked_codec == "bytevc2":
+        actor.log.warning(
+            f"[pipeline] ⚠ bytevc2 URL 선택됨 — 재생 실패 예상 id={video_id} "
+            f"source={url_source} host={host}"
+        )
+    elif url_source == "play_addr_h264":
         actor.log.info(
-            f"[pipeline] ✅ no-watermark path id={video_id} host={host} "
-            f"source=tikwm(hdplay/play)"
+            f"[pipeline] ✅ safe h264 path id={video_id} source=play_addr_h264 "
+            f"host={host} wm={picked_wm}"
+        )
+    elif url_source == "tikwm":
+        actor.log.info(
+            f"[pipeline] ✅ no-watermark path id={video_id} source=tikwm(hdplay/play) "
+            f"host={host} codec={picked_codec} wm={picked_wm}"
         )
     else:
         fallback_reason = "tikwm_none" if not tikwm_data else "tikwm_url_missing"
         actor.log.warning(
-            f"[pipeline] ⚠ watermark-risk path id={video_id} host={host} "
-            f"source=tiktok_cdn fallback_reason={fallback_reason}"
+            f"[pipeline] ⚠ fallback path id={video_id} source={url_source} "
+            f"host={host} codec={picked_codec} wm={picked_wm} "
+            f"reason={fallback_reason}"
         )
 
     # 4. 전체 다운로드

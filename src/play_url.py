@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from url_sorting import _addr_block_sort_key
+from url_sorting import _addr_block_sort_key, _url_codec_rank, _url_watermark_rank
 
 # 데이터셋에 넣는 재생 URL 후보 개수(ORB·403 시 소비자가 다음 항목 시도).
 PLAY_URL_CANDIDATES_MAX = 12
@@ -333,7 +333,22 @@ def _play_url_candidates(video: dict) -> list[str]:
     br = _bit_rate_entries(video)
     br_sorted = sorted(br, key=_bitrate_sort_key) if br else []
 
-    # Tier A: 실제 스트리밍 블록 play_addr (download_addr보다 우선)
+    # Tier A-0: play_addr_h264 — 앱 API가 명시적으로 h264 변종을 따로 제공할 때.
+    # yt-dlp도 이 필드를 최우선으로 사용. 현재 웹 API엔 대개 없지만 있으면 무조건 안전.
+    tier_a0: list[str] = []
+    for pk in ("play_addr_h264", "playAddrH264", "PlayAddrH264"):
+        if pk in video:
+            tier_a0.extend(_urls_from_addr_block(video.get(pk)))
+    for item in br_sorted:
+        if not isinstance(item, dict):
+            continue
+        for pk in ("play_addr_h264", "playAddrH264", "PlayAddrH264"):
+            if pk in item:
+                tier_a0.extend(_urls_from_addr_block(item.get(pk)))
+    extend_tier(tier_a0)
+
+    # Tier A: 실제 스트리밍 블록 play_addr (download_addr보다 우선).
+    # _addr_block_sort_key가 URL 경로의 _bytevc2_ 패턴을 penalty 처리하므로 안전.
     tier_a: list[str] = []
     for item in br_sorted:
         if not isinstance(item, dict):
@@ -436,6 +451,38 @@ def _first_video_play_url(video: dict) -> str | None:
         return None
     primary, _, _ = _best_preview_play_url(u)
     return primary
+
+
+def _classify_url(url: str) -> dict:
+    """URL 한 개를 코덱·워터마크 관점에서 분류.
+
+    반환: {"codec": "h264|bytevc1|bytevc2|unknown", "watermark": "no|maybe|yes"}
+    download_pipeline에서 "TikWM vs bit_rate h264 중 무엇을 쓸지" 결정에 사용.
+    """
+    if not url:
+        return {"codec": "unknown", "watermark": "maybe"}
+    ul = url.lower()
+    codec_rank = _url_codec_rank(ul)
+    wm_rank = _url_watermark_rank(ul)
+    codec_map = {0: "h264", 1: "bytevc1", 2: "unknown", 3: "bytevc2"}
+    wm_map = {0: "no", 1: "maybe", 2: "yes"}
+    return {
+        "codec": codec_map.get(codec_rank, "unknown"),
+        "watermark": wm_map.get(wm_rank, "maybe"),
+    }
+
+
+def _first_safe_h264_url(play_urls: list[str]) -> str | None:
+    """후보 URL 중 코덱이 h264이고 워터마크가 "예(yes)"가 아닌 첫 번째 URL.
+
+    play_addr에 h264 변종이 존재할 때 TikWM보다 이걸 우선 쓰기 위한 헬퍼.
+    URL 경로에 `_h264_` 가 없으면 반환 안 함(코덱 확신 없는 URL 금지).
+    """
+    for u in play_urls:
+        c = _classify_url(u)
+        if c["codec"] == "h264" and c["watermark"] != "yes":
+            return u
+    return None
 
 
 def _codec_summary(video: dict) -> list[tuple[str, int]]:

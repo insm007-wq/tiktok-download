@@ -10,7 +10,12 @@ from apify import Actor
 from url_parser import parse_video_input
 from video_detail import fetch_video_detail, fetch_video_detail_html
 from video_storage import download_full_video
-from play_url import _play_url_candidates, _best_preview_play_url, _merged_video_block
+from play_url import (
+    _play_url_candidates,
+    _best_preview_play_url,
+    _merged_video_block,
+    _codec_summary,
+)
 from tikwm_api import fetch_tikwm
 from aweme_fields import (
     _hashtags_from_aweme,
@@ -117,6 +122,12 @@ async def process_video(
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
     fallback_cdn = primary_url or (candidates[0] if candidates else None)
+
+    # 진단: bit_rate 항목의 코덱 목록. bytevc2가 1순위로 정렬되면 호환성 문제 있음.
+    codec_list = _codec_summary(video_block)
+    if codec_list:
+        codecs_str = ", ".join(f"{c}@{b}" for c, b in codec_list[:5])
+        actor.log.info(f"[pipeline] codec_candidates id={video_id} [{codecs_str}]")
 
     tikwm_url = None
     if tikwm_data:

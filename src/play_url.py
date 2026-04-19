@@ -271,18 +271,49 @@ def _bit_rate_entries(video: dict) -> list[Any]:
     return []
 
 
-def _bitrate_sort_key(item: Any) -> int:
-    """낮은 비트레이트 우선(작은 숫자 먼저)."""
+# 코덱 호환성 랭크 — 낮을수록 범용 재생 가능성 높음.
+# bytevc2(ByteVC2)는 Windows 기본 플레이어·대부분 브라우저 미지원 → 영상 안 나오고
+# 오디오만 재생되는 증상의 주원인이라 마지막 순위로 밀어둠.
+_CODEC_RANK = {
+    "h264": 0,
+    "avc1": 0,
+    "h265": 1,
+    "hevc": 1,
+    "bytevc1": 2,  # ByteDance 변종 H.265
+    "bytevc2": 3,  # ByteDance 변종 H.266 — 호환성 최악
+}
+
+
+def _codec_type(item: Any) -> str:
     if not isinstance(item, dict):
-        return 0
+        return ""
+    for k in ("codec_type", "codecType", "CodecType"):
+        v = item.get(k)
+        if isinstance(v, str):
+            return v.strip().lower()
+    return ""
+
+
+def _bitrate_sort_key(item: Any) -> tuple[int, int]:
+    """정렬: (코덱 호환성 랭크, 비트레이트) — h264 우선, 그 안에서 낮은 비트레이트 우선.
+
+    bytevc2를 밀어내지 않으면 Windows 기본 플레이어에서 "음성만 나오는 영상" 이슈 발생.
+    """
+    if not isinstance(item, dict):
+        return (99, 0)
+    codec = _codec_type(item)
+    # 모르는 코덱은 mid-risk(2)로 취급 — bytevc2(3)보다는 앞, h264/h265(0~1)보다는 뒤
+    codec_rank = _CODEC_RANK.get(codec, 2)
+    bitrate = 0
     for k in ("BitRate", "bit_rate", "bitrate"):
         v = item.get(k)
         if v is not None:
             try:
-                return int(v)
+                bitrate = int(v)
+                break
             except (TypeError, ValueError):
                 pass
-    return 0
+    return (codec_rank, bitrate)
 
 
 def _play_url_candidates(video: dict) -> list[str]:
@@ -405,3 +436,32 @@ def _first_video_play_url(video: dict) -> str | None:
         return None
     primary, _, _ = _best_preview_play_url(u)
     return primary
+
+
+def _codec_summary(video: dict) -> list[tuple[str, int]]:
+    """진단용: bit_rate 항목의 (codec, bitrate) 목록을 코덱 호환성 순으로 반환.
+
+    Apify 로그에서 "어떤 코덱 후보가 있었고 어떤 게 골라졌는지" 확인용.
+    """
+    if not isinstance(video, dict):
+        return []
+    br = _bit_rate_entries(video)
+    if not br:
+        return []
+    sorted_br = sorted(br, key=_bitrate_sort_key)
+    out: list[tuple[str, int]] = []
+    for item in sorted_br:
+        if not isinstance(item, dict):
+            continue
+        codec = _codec_type(item) or "?"
+        bitrate = 0
+        for k in ("BitRate", "bit_rate", "bitrate"):
+            v = item.get(k)
+            if v is not None:
+                try:
+                    bitrate = int(v)
+                    break
+                except (TypeError, ValueError):
+                    pass
+        out.append((codec, bitrate))
+    return out

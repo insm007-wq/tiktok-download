@@ -8,7 +8,7 @@
       "type": "array",
       "description": "TikTok video URLs or video IDs. Supports: https://www.tiktok.com/@user/video/123, https://vm.tiktok.com/ZMxxx/, or raw numeric IDs.",
       "editor": "stringList",
-      "prefill": [],
+      "prefill": ["https://www.tiktok.com/@tiktok/video/7106594312292453675"],
       "minItems": 1
     }
   },

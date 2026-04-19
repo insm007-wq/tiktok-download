@@ -134,11 +134,19 @@ async def process_video(
         )
 
     # 진단: 워터마크 소스 추적용. tikwm = 워터마크 없음(hdplay/play),
-    # tiktok_cdn은 도메인에 따라 달라짐 — host 로그와 함께 확인.
+    # tiktok_cdn 폴백은 워터마크 박힌 URL일 위험 구간 — WARN으로 구분.
     host = urlparse(cdn_url).netloc
-    actor.log.info(
-        f"[pipeline] cdn_url host={host} url_source={url_source} id={video_id}"
-    )
+    if url_source == "tikwm":
+        actor.log.info(
+            f"[pipeline] ✅ no-watermark path id={video_id} host={host} "
+            f"source=tikwm(hdplay/play)"
+        )
+    else:
+        fallback_reason = "tikwm_none" if not tikwm_data else "tikwm_url_missing"
+        actor.log.warning(
+            f"[pipeline] ⚠ watermark-risk path id={video_id} host={host} "
+            f"source=tiktok_cdn fallback_reason={fallback_reason}"
+        )
 
     # 4. 전체 다운로드
     cookies = _cookie_dict(client)

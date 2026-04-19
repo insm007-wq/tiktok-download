@@ -485,6 +485,38 @@ def _first_safe_h264_url(play_urls: list[str]) -> str | None:
     return None
 
 
+def _h264_url_from_bitrate(video: dict) -> str | None:
+    """bit_rate 엔트리 중 codec_type 필드가 h264인 것의 play_addr URL.
+
+    `_first_safe_h264_url` 은 URL 경로에 `_h264_` 가 박힌 경우만 신뢰하지만,
+    TikTok CDN URL 중에는 코덱 힌트가 경로에 없는 케이스가 많음. bit_rate의 dict
+    레벨 `codec_type` 필드는 신뢰도 높으니 이걸로 h264 엔트리를 찾고, 그 엔트리의
+    play_addr URL 목록에서 워터마크 "yes" 아닌 것을 고름.
+
+    URL 경로 기반 `_first_safe_h264_url` 과 상호 보완.
+    """
+    if not isinstance(video, dict):
+        return None
+    br = _bit_rate_entries(video)
+    if not br:
+        return None
+    sorted_br = sorted(br, key=_bitrate_sort_key)
+    for item in sorted_br:
+        if not isinstance(item, dict):
+            continue
+        codec = _codec_type(item)
+        if codec not in ("h264", "avc1"):
+            continue
+        urls: list[str] = []
+        for pk in ("play_addr_h264", "playAddrH264", "play_addr", "playAddr", "PlayAddr"):
+            if pk in item:
+                urls.extend(_urls_from_addr_block(item.get(pk)))
+        for u in sorted(urls, key=_addr_block_sort_key):
+            if _classify_url(u)["watermark"] != "yes":
+                return u
+    return None
+
+
 def _codec_summary(video: dict) -> list[tuple[str, int]]:
     """진단용: bit_rate 항목의 (codec, bitrate) 목록을 코덱 호환성 순으로 반환.
 

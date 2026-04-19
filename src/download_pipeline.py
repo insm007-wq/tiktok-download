@@ -17,6 +17,7 @@ from play_url import (
     _codec_summary,
     _classify_url,
     _first_safe_h264_url,
+    _h264_url_from_bitrate,
 )
 from tikwm_api import fetch_tikwm
 from aweme_fields import (
@@ -121,10 +122,11 @@ async def process_video(
 
     # 3. 영상 URL 결정 — 다층 방어 fallback (yt-dlp 방식 참고).
     # 우선순위:
-    #   1. bit_rate의 URL 중 `_h264_` 박힌 확정 h264 + 워터마크 "yes" 아닌 것
-    #   2. TikWM hdplay/play (워터마크는 없지만 코덱 보증 없음 — bytevc2일 수 있음)
-    #   3. bit_rate 정렬 1순위 (URL 코덱·워터마크 기반 정렬됨)
-    #   4. 최후 fallback
+    #   1. bit_rate 엔트리의 codec_type=h264 의 play_addr URL (dict 레벨 메타 신뢰)
+    #   2. URL 경로에 `_h264_` 박힌 play_addr URL (URL 패턴 신뢰)
+    #   3. TikWM hdplay/play (워터마크는 없지만 코덱 보증 없음 — bytevc2일 수 있음)
+    #   4. bit_rate 정렬 1순위 (URL 코덱·워터마크 기반 정렬됨)
+    #   5. 최후 fallback
     video_block = _merged_video_block(aweme, aweme)
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
@@ -141,14 +143,19 @@ async def process_video(
     if tikwm_data:
         tikwm_url = tikwm_data.get("hdplay") or tikwm_data.get("play")
 
-    # 1순위: bit_rate 중 확정 h264 + 워터마크 "yes" 아님
+    # 1순위: bit_rate 엔트리의 codec_type=h264 (메타 신뢰)
+    h264_from_bitrate = _h264_url_from_bitrate(video_block)
+    # 2순위: URL 경로에 `_h264_` 박힌 것 (패턴 신뢰)
     safe_h264 = _first_safe_h264_url(play_urls)
 
     cdn_url: str | None = None
     url_source = "unknown"
-    if safe_h264:
+    if h264_from_bitrate:
+        cdn_url = h264_from_bitrate
+        url_source = "bitrate_h264"
+    elif safe_h264:
         cdn_url = safe_h264
-        url_source = "play_addr_h264"
+        url_source = "play_addr_h264_pattern"
     elif tikwm_url:
         cdn_url = tikwm_url
         url_source = "tikwm"
@@ -176,9 +183,9 @@ async def process_video(
             f"[pipeline] ⚠ bytevc2 URL 선택됨 — 재생 실패 예상 id={video_id} "
             f"source={url_source} host={host}"
         )
-    elif url_source == "play_addr_h264":
+    elif url_source in ("bitrate_h264", "play_addr_h264_pattern"):
         actor.log.info(
-            f"[pipeline] ✅ safe h264 path id={video_id} source=play_addr_h264 "
+            f"[pipeline] ✅ safe h264 path id={video_id} source={url_source} "
             f"host={host} wm={picked_wm}"
         )
     elif url_source == "tikwm":

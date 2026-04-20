@@ -1,15 +1,25 @@
 """TikTok CDN URL을 Railway 스트리밍 프록시 URL로 서명·포장.
 
-Apify KV Store 9MB 한계를 넘는 영상은 CDN URL 그대로 반환하면 브라우저에서
-`Referer` 누락으로 403이 난다. 이 모듈은 Railway 프록시(`/v/:videoId`)에 HMAC
-서명된 URL을 만들어 고객이 헤더·쿠키 없이도 바로 다운로드할 수 있게 한다.
+TikTok CDN URL 은 `Referer` 누락 시 브라우저에서 403. 이 모듈은 Railway 프록시
+(`/v/:videoId`)에 HMAC 서명된 URL을 만들어 고객이 헤더·쿠키 없이도 바로
+다운로드할 수 있게 한다.
 
-환경 변수:
-  TIKTOK_VIDEO_PROXY_BASE    — 예: https://proxyapify-production-d4c5.up.railway.app
-  TIKTOK_VIDEO_PROXY_SECRET  — Railway 쪽 VIDEO_PROXY_SECRET 과 동일한 랜덤 문자열
+## 우선순위
+
+1. `TIKTOK_VIDEO_PROXY_BASE` 환경 변수 (배포·테스트 오버라이드용)
+2. `_DEFAULT_PROXY_BASE` 하드코딩 상수 (엑터 사용 고객이 env 설정 없이도 동작)
+
+시크릿(`TIKTOK_VIDEO_PROXY_SECRET`)은 **반드시 env 로만 주입** — 코드에
+하드코딩하지 않는다. Apify 콘솔에서 Actor 단위 환경변수(secret 타입)로 한 번
+등록하면 모든 런에 자동 주입되며 고객에게는 노출되지 않음.
+
+## 환경 변수
+
+  TIKTOK_VIDEO_PROXY_BASE    — 선택. 비워두면 `_DEFAULT_PROXY_BASE` 사용
+  TIKTOK_VIDEO_PROXY_SECRET  — 필수. Railway `VIDEO_PROXY_SECRET` 과 동일한 값
   TIKTOK_VIDEO_PROXY_TTL_SEC — 선택, 기본 86400 (24시간)
 
-둘 중 하나라도 없으면 `build_proxy_url()`이 None 반환 → 호출자가 원본 CDN URL로 폴백.
+시크릿이 없으면 `build_proxy_url()`이 None 반환 → 호출자가 원본 CDN URL 폴백.
 """
 from __future__ import annotations
 
@@ -19,11 +29,23 @@ import os
 import time
 import urllib.parse
 
+# Railway 에 배포된 영상 프록시 서비스의 공개 URL.
+# proxy_apify 레포의 Dockerfile.video 로 빌드되는 서비스이며, 새 Railway
+# 서비스를 만든 뒤 발급받은 도메인으로 이 값을 교체해야 함.
+# 교체 후 재배포만 하면 고객은 별도 env 설정 없이 동작.
+_DEFAULT_PROXY_BASE = "https://proxyapify-video-production.up.railway.app"
+
 _DEFAULT_TTL_SEC = 86400  # 24h — TikTok CDN 서명도 대체로 24h 안이라 더 길어봐야 업스트림 만료
 
 
 def _env(name: str) -> str:
     return (os.environ.get(name) or "").strip()
+
+
+def _proxy_base() -> str:
+    """env 우선, 없으면 하드코딩 기본값."""
+    override = _env("TIKTOK_VIDEO_PROXY_BASE")
+    return (override or _DEFAULT_PROXY_BASE).rstrip("/")
 
 
 def _ttl_sec() -> int:
@@ -44,7 +66,8 @@ def build_proxy_url(video_id: str, cdn_url: str) -> str | None:
 
     실패 조건:
       - video_id 또는 cdn_url 비어 있음
-      - 환경 변수 누락 → 호출자는 CDN URL 그대로 돌려주는 폴백 경로를 타야 함.
+      - base URL 비어 있음 (env·하드코딩 모두 없을 때 — 실질적으로 안 발생)
+      - `TIKTOK_VIDEO_PROXY_SECRET` 미설정 → 호출자는 CDN URL 그대로 돌려주는 폴백 경로를 타야 함
 
     반환 URL 예:
       https://<base>/v/<video_id>?u=<urlenc_cdn>&e=<exp>&s=<hmac_hex>
@@ -52,7 +75,7 @@ def build_proxy_url(video_id: str, cdn_url: str) -> str | None:
     if not video_id or not cdn_url:
         return None
 
-    base = _env("TIKTOK_VIDEO_PROXY_BASE").rstrip("/")
+    base = _proxy_base()
     secret = _env("TIKTOK_VIDEO_PROXY_SECRET")
     if not base or not secret:
         return None

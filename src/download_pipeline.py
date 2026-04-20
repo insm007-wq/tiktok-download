@@ -1,4 +1,8 @@
-"""다운로드 파이프라인 — URL 파싱 → 영상 조회 → 다운로드 → dataset push."""
+"""다운로드 파이프라인 — URL 파싱 → 영상 메타 조회 → 프록시 URL 발행 → dataset push.
+
+URL Resolver 모델: 엑터는 바이트를 다운로드하지 않고 서명된 Railway 프록시 URL 만
+반환. 실제 스트리밍은 고객 브라우저가 프록시를 통해 TikTok CDN 에서 받음.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -8,7 +12,7 @@ from apify import Actor
 
 from url_parser import parse_video_input
 from video_detail import fetch_video_detail, fetch_video_detail_html
-from video_storage import download_full_video
+from video_storage import resolve_download_url
 from play_url import (
     _play_url_candidates,
     _best_preview_play_url,
@@ -17,6 +21,7 @@ from play_url import (
     _classify_url,
     _first_safe_h264_url,
     _h264_url_from_bitrate,
+    _file_size_from_bit_rate,
 )
 from aweme_fields import (
     _hashtags_from_aweme,
@@ -24,7 +29,6 @@ from aweme_fields import (
     _stat_int,
     _uploaded_at_seconds,
 )
-from session import cookie_dict as _cookie_dict
 
 
 async def process_video(
@@ -146,12 +150,10 @@ async def process_video(
             f"host={host} codec={picked_codec} wm={picked_wm}"
         )
 
-    # 4. 전체 다운로드
-    cookies = _cookie_dict(client)
-    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
-
-    dl_result = await download_full_video(
-        actor, client, cdn_url, video_id, cookie_str, max_size_bytes,
+    # 4. 파일 크기 추출 + 프록시 URL 발행 (실제 바이트 다운로드 없음)
+    file_size = _file_size_from_bit_rate(video_block)
+    dl_result = resolve_download_url(
+        actor, video_id, cdn_url, file_size, max_size_bytes,
     )
 
     # 5. 결과 조합

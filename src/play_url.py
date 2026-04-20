@@ -507,6 +507,39 @@ def _h264_url_from_bitrate(video: dict) -> str | None:
     return None
 
 
+def _file_size_from_bit_rate(video: dict) -> int:
+    """bit_rate 엔트리의 data_size(bytes) — 코덱 호환성 정렬 첫 엔트리 기준.
+
+    실제 HEAD·GET 없이 메타만으로 파일 크기를 확보하기 위함. TikTok API 가 주는 값은
+    실측 대비 ±5% 오차이지만 사용자 상한(예: 30MB) 필터링에는 충분.
+    없으면 0 반환 — 호출자는 "알 수 없음" 으로 처리.
+    """
+    if not isinstance(video, dict):
+        return 0
+    br = _bit_rate_entries(video)
+    if not br:
+        return 0
+    sorted_br = sorted(br, key=_bitrate_sort_key)
+    for item in sorted_br:
+        if not isinstance(item, dict):
+            continue
+        # data_size 가 bit_rate 엔트리 직속일 수도, play_addr 안일 수도 있음
+        for loc in (item, item.get("play_addr"), item.get("playAddr")):
+            if not isinstance(loc, dict):
+                continue
+            for k in ("data_size", "dataSize", "file_size", "fileSize", "size"):
+                v = loc.get(k)
+                if v is None:
+                    continue
+                try:
+                    n = int(v)
+                    if n > 0:
+                        return n
+                except (TypeError, ValueError):
+                    continue
+    return 0
+
+
 def _codec_summary(video: dict) -> list[tuple[str, int]]:
     """진단용: bit_rate 항목의 (codec, bitrate) 목록을 코덱 호환성 순으로 반환.
 

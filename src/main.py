@@ -23,7 +23,7 @@ from download_pipeline import process_video
 
 # 액터 내부 고정 정책 (Store UI 에 노출하지 않음)
 _MAX_VIDEO_SIZE_MB = 30
-_MAX_CONCURRENT = 5
+_MAX_CONCURRENT = 10  # URL Resolver 모델로 전환 후 HEAD/GET 부담 제거, 동시성 상향
 _PROXY_GROUPS = ["RESIDENTIAL"]
 
 

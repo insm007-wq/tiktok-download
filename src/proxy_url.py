@@ -29,11 +29,10 @@ import os
 import time
 import urllib.parse
 
-# Railway 에 배포된 영상 프록시 서비스의 공개 URL.
-# proxy_apify 레포의 Dockerfile.video 로 빌드되는 서비스이며, 새 Railway
-# 서비스를 만든 뒤 발급받은 도메인으로 이 값을 교체해야 함.
-# 교체 후 재배포만 하면 고객은 별도 env 설정 없이 동작.
-_DEFAULT_PROXY_BASE = "https://proxyapify-video-production.up.railway.app"
+# Railway 에 배포된 proxy_apify 공용 허브의 공개 URL.
+# 같은 서비스가 /mstoken (검색 엑터용) 과 /v/:videoId (다운로드 엑터용) 을 같이 서빙.
+# 이 URL 은 tiktok-search 엑터의 _DEFAULT_MSTOKEN_URL 과 동일한 base.
+_DEFAULT_PROXY_BASE = "https://proxyapify-production-d4c5.up.railway.app"
 
 _DEFAULT_TTL_SEC = 86400  # 24h — TikTok CDN 서명도 대체로 24h 안이라 더 길어봐야 업스트림 만료
 

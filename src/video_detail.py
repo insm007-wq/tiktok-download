@@ -146,9 +146,8 @@ async def fetch_video_detail_html(
 ) -> dict | None:
     """HTML 페이지에서 __UNIVERSAL_DATA_FOR_REHYDRATION__ 파싱으로 aweme 데이터 추출.
 
-    RESIDENTIAL 프록시의 간헐적 `CONNECT tunnel failed` 에러 → 1회 재시도. 재시도 없이
-    즉시 실패하면 TikWM 메타로 aweme 재구성 → bit_rate 없어서 코덱 확인 불가 → bytevc2
-    다운로드 위험. 재시도로 HTML 성공률 올려서 bit_rate 확보하는 게 가장 안전한 길.
+    RESIDENTIAL 프록시의 간헐적 `CONNECT tunnel failed` 에러 → 1회 재시도. HTML에서 나온
+    bit_rate가 코덱 확인(bytevc2 회피)의 근거라 이 폴백이 성공해야 안전한 h264 URL 선택 가능.
     """
     ua = _FIXED_UA
     if username:

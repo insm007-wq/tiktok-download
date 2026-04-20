@@ -65,11 +65,11 @@ async def download_full_video(
     if cookie_str:
         headers["Cookie"] = cookie_str
 
-    # 1단계: HEAD 요청으로 파일 크기 확인
+    # 1단계: HEAD 요청으로 파일 크기 확인. 타임아웃 짧게(5s) — 실패 시 GET으로 바로 폴백.
     content_length = 0
     try:
         head_resp = await client.head(
-            cdn_url, headers=headers, timeout=15.0,
+            cdn_url, headers=headers, timeout=5.0,
             allow_redirects=True,
         )
         cl = head_resp.headers.get("content-length")

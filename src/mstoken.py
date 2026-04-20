@@ -9,7 +9,7 @@ HTTP 응답만으로는 정상적으로 얻을 수 없음이 로그로 확인되
 
     1) override       — 사용자가 input으로 직접 붙여넣은 값 (가장 신뢰)
     2) cookie jar     — 서버가 Set-Cookie로 심은 값 (실전에선 거의 안 옴)
-    3) x-ms-token     — 이전 API 응답 헤더로 서버가 에코한 값
+    3) cache          — 이전 응답/HTML 파싱에서 캐시된 값
     4) html 파싱      — /search HTML 내부 JSON에 박힌 값 (형식이 있을 때만)
     5) generated      — 랜덤 107자 fallback (`generators.generate_random_ms_token`)
 
@@ -29,7 +29,7 @@ from generators import generate_random_ms_token
 @dataclass
 class MsTokenResult:
     value: str
-    source: str       # "override" | "cookie" | "cache" | "html" | "generated" | "empty"
+    source: str       # "override" | "cookie" | "cache" | "html" | "generated"
 
     def __bool__(self) -> bool:
         return bool(self.value)
@@ -76,18 +76,6 @@ def resolve_ms_token(
         return MsTokenResult(cached, src)
 
     return MsTokenResult(generate_random_ms_token(), "generated")
-
-
-def record_server_ms_token(client: Any, value: str | None, source: str = "server") -> None:
-    """검색 API 응답 헤더 `x-ms-token` 값을 client 캐시에 반영.
-
-    search_api.py의 `_apply_server_tokens`가 사용. 빈 값은 무시.
-    """
-    v = (value or "").strip()
-    if not v:
-        return
-    client._tt_ms_token = v
-    client._tt_ms_token_source = source
 
 
 def record_html_ms_token(client: Any, value: str | None) -> None:

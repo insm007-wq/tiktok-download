@@ -444,20 +444,11 @@ def _merged_video_block(raw: dict, aweme: dict) -> dict:
     return {**rv, **av}
 
 
-def _first_video_play_url(video: dict) -> str | None:
-    """킬라 호환: 재생 후보 중 프리뷰와 동일 규칙(HLS보다 직링크 우선)."""
-    u = _play_url_candidates(video)
-    if not u:
-        return None
-    primary, _, _ = _best_preview_play_url(u)
-    return primary
-
-
 def _classify_url(url: str) -> dict:
     """URL 한 개를 코덱·워터마크 관점에서 분류.
 
     반환: {"codec": "h264|bytevc1|bytevc2|unknown", "watermark": "no|maybe|yes"}
-    download_pipeline에서 "TikWM vs bit_rate h264 중 무엇을 쓸지" 결정에 사용.
+    download_pipeline에서 선택된 CDN URL의 진단 로그에 사용.
     """
     if not url:
         return {"codec": "unknown", "watermark": "maybe"}
@@ -475,7 +466,6 @@ def _classify_url(url: str) -> dict:
 def _first_safe_h264_url(play_urls: list[str]) -> str | None:
     """후보 URL 중 코덱이 h264이고 워터마크가 "예(yes)"가 아닌 첫 번째 URL.
 
-    play_addr에 h264 변종이 존재할 때 TikWM보다 이걸 우선 쓰기 위한 헬퍼.
     URL 경로에 `_h264_` 가 없으면 반환 안 함(코덱 확신 없는 URL 금지).
     """
     for u in play_urls:

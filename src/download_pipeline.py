@@ -1,7 +1,6 @@
 """다운로드 파이프라인 — URL 파싱 → 영상 조회 → 다운로드 → dataset push."""
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from urllib.parse import urlparse
 
@@ -19,7 +18,6 @@ from play_url import (
     _first_safe_h264_url,
     _h264_url_from_bitrate,
 )
-from tikwm_api import fetch_tikwm
 from aweme_fields import (
     _hashtags_from_aweme,
     _statistics_merged,
@@ -27,28 +25,6 @@ from aweme_fields import (
     _uploaded_at_seconds,
 )
 from session import cookie_dict as _cookie_dict
-
-
-def _aweme_from_tikwm(d: dict, video_id: str) -> dict:
-    """TikWM data dict → _build_result이 기대하는 aweme 스키마.
-
-    웹 API·HTML 모두 실패했을 때 최소 메타데이터를 채우기 위한 폴백.
-    `aweme_fields.py`가 camelCase/snake_case 병행 처리하므로 TikWM의 snake_case
-    필드명을 그대로 둬도 추출됨. duration은 초(TikWM) → ms(기존 스키마) 변환.
-    """
-    return {
-        "aweme_id": d.get("id") or video_id,
-        "desc": d.get("title") or "",
-        "author": d.get("author") or {},
-        "statistics": {
-            "play_count": d.get("play_count", 0),
-            "digg_count": d.get("digg_count", 0),
-            "comment_count": d.get("comment_count", 0),
-            "share_count": d.get("share_count", 0),
-        },
-        "create_time": d.get("create_time", 0),
-        "video": {"duration": (d.get("duration") or 0) * 1000},
-    }
 
 
 async def process_video(
@@ -73,27 +49,16 @@ async def process_video(
     video_id = video_input.video_id
     actor.log.info(f"[pipeline] 처리 시작 id={video_id} url={video_input.original}")
 
-    # 2. 영상 상세 데이터 조회 — TikTok 웹 API와 TikWM 병렬 호출.
-    # TikWM(공개 API)는 워터마크 없는 CDN URL(hdplay/play) 확보용.
-    # return_exceptions=True — 한쪽 태스크가 예외를 던져도 다른 쪽 결과를 살리고
-    # 나머지 폴백 체인(HTML·TikWM 재구성)으로 자연스럽게 복구.
-    aweme, tikwm_data = await asyncio.gather(
-        fetch_video_detail(client, video_id, actor, ms_token_override=ms_token_override),
-        fetch_tikwm(client, raw_url, actor),
-        return_exceptions=True,
-    )
-    if isinstance(aweme, BaseException):
+    # 2. 영상 상세 데이터 조회 — TikTok 웹 API → HTML 폴백.
+    try:
+        aweme = await fetch_video_detail(
+            client, video_id, actor, ms_token_override=ms_token_override,
+        )
+    except Exception as e:
         actor.log.warning(
-            f"[pipeline] 웹 API 예외 id={video_id}: "
-            f"{type(aweme).__name__}: {aweme}"
+            f"[pipeline] 웹 API 예외 id={video_id}: {type(e).__name__}: {e}"
         )
         aweme = None
-    if isinstance(tikwm_data, BaseException):
-        actor.log.warning(
-            f"[pipeline] TikWM 예외 id={video_id}: "
-            f"{type(tikwm_data).__name__}: {tikwm_data}"
-        )
-        tikwm_data = None
 
     if not aweme:
         actor.log.info(f"[pipeline] 웹 API 실패 → HTML 폴백 id={video_id}")
@@ -107,9 +72,6 @@ async def process_video(
                 f"{type(e).__name__}: {e}"
             )
             aweme = None
-    if not aweme and tikwm_data:
-        actor.log.info(f"[pipeline] 웹·HTML 실패 → TikWM 메타로 재구성 id={video_id}")
-        aweme = _aweme_from_tikwm(tikwm_data, video_id)
 
     if not aweme:
         actor.log.error(f"[pipeline] 영상 데이터 조회 실패 id={video_id}")
@@ -124,9 +86,7 @@ async def process_video(
     # 우선순위:
     #   1. bit_rate 엔트리의 codec_type=h264 의 play_addr URL (dict 레벨 메타 신뢰)
     #   2. URL 경로에 `_h264_` 박힌 play_addr URL (URL 패턴 신뢰)
-    #   3. TikWM hdplay/play (워터마크는 없지만 코덱 보증 없음 — bytevc2일 수 있음)
-    #   4. bit_rate 정렬 1순위 (URL 코덱·워터마크 기반 정렬됨)
-    #   5. 최후 fallback
+    #   3. bit_rate 정렬 1순위 (URL 코덱·워터마크 기반 정렬됨) — 최후 fallback
     video_block = _merged_video_block(aweme, aweme)
     play_urls = _play_url_candidates(video_block)
     primary_url, hls_url, candidates = _best_preview_play_url(play_urls)
@@ -143,20 +103,6 @@ async def process_video(
     # 2순위: URL 경로에 `_h264_` 박힌 것 (패턴 신뢰)
     safe_h264 = _first_safe_h264_url(play_urls)
 
-    # TikWM URL 선택 — hdplay는 가끔 bytevc2(재생 실패)라서
-    # bit_rate 메타로 h264 확인된 케이스에서만 hdplay(HD) 써도 안전.
-    # bit_rate 없으면(HTML 폴백 실패 시 TikWM 메타만 있는 상황) → `play`(표준 H.264) 우선.
-    tikwm_url = None
-    tikwm_pick = ""
-    if tikwm_data:
-        has_h264_meta = bool(h264_from_bitrate or safe_h264)
-        if has_h264_meta:
-            tikwm_url = tikwm_data.get("hdplay") or tikwm_data.get("play")
-            tikwm_pick = "hdplay_pref"
-        else:
-            tikwm_url = tikwm_data.get("play") or tikwm_data.get("hdplay")
-            tikwm_pick = "play_pref_no_meta"
-
     cdn_url: str | None = None
     url_source = "unknown"
     if h264_from_bitrate:
@@ -165,9 +111,6 @@ async def process_video(
     elif safe_h264:
         cdn_url = safe_h264
         url_source = "play_addr_h264_pattern"
-    elif tikwm_url:
-        cdn_url = tikwm_url
-        url_source = "tikwm"
     elif fallback_cdn:
         cdn_url = fallback_cdn
         url_source = "tiktok_cdn_sorted"
@@ -197,17 +140,10 @@ async def process_video(
             f"[pipeline] ✅ safe h264 path id={video_id} source={url_source} "
             f"host={host} wm={picked_wm}"
         )
-    elif url_source == "tikwm":
-        actor.log.info(
-            f"[pipeline] ✅ no-watermark path id={video_id} source=tikwm({tikwm_pick}) "
-            f"host={host} codec={picked_codec} wm={picked_wm}"
-        )
     else:
-        fallback_reason = "tikwm_none" if not tikwm_data else "tikwm_url_missing"
         actor.log.warning(
             f"[pipeline] ⚠ fallback path id={video_id} source={url_source} "
-            f"host={host} codec={picked_codec} wm={picked_wm} "
-            f"reason={fallback_reason}"
+            f"host={host} codec={picked_codec} wm={picked_wm}"
         )
 
     # 4. 전체 다운로드
